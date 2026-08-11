@@ -19,8 +19,9 @@ import random
 class NuclearFissionFusion(Scene):
     def construct(self):
         # --- INTRO ---
-        title = MarkupText("<gradient from='RED' to='YELLOW'>Advanced Nuclear Physics</gradient>", font_size=48)
-        subtitle = Text("Fission & Fusion Dynamics", font_size=32, color=BLUE_B)
+        # Fixed: Using native Text gradients instead of MarkupText to prevent Pango crashes
+        title = Text("Advanced Nuclear Physics", font_size=48, gradient=(RED, YELLOW))
+        subtitle = Text("Fission & Fusion Dynamics", font_size=32, color=BLUE)
         intro_group = VGroup(title, subtitle).arrange(DOWN, buff=0.5)
         
         self.play(DrawBorderThenFill(title), run_time=1.5)
@@ -32,9 +33,9 @@ class NuclearFissionFusion(Scene):
         def get_nucleus(p_count, n_count, scale=1.0):
             particles = VGroup()
             for _ in range(p_count):
-                particles.add(Dot(color=RED_C, radius=0.15 * scale).set_z_index(1))
+                particles.add(Dot(color=RED, radius=0.15 * scale).set_z_index(1))
             for _ in range(n_count):
-                particles.add(Dot(color=BLUE_C, radius=0.15 * scale).set_z_index(1))
+                particles.add(Dot(color=BLUE, radius=0.15 * scale).set_z_index(1))
             
             # Random tight clustering to look like a real atom
             for dot in particles:
@@ -47,7 +48,7 @@ class NuclearFissionFusion(Scene):
         fission_text = Text("1. Nuclear Fission", color=YELLOW, font_size=32).to_corner(UL)
         self.play(Write(fission_text))
 
-        # U-235 Nucleus (Visual representation)
+        # U-235 Nucleus
         u235 = get_nucleus(15, 20) 
         u235.move_to(ORIGIN)
         u235_label = Text("Uranium-235", font_size=24).next_to(u235, DOWN * 2)
@@ -107,7 +108,7 @@ class NuclearFissionFusion(Scene):
         self.play(FadeOut(VGroup(ba141, kr92, n1, n2, n3, energy_text, fission_text)))
 
         # --- PART 2: FUSION ---
-        fusion_text = Text("2. Nuclear Fusion", color=RED_4C, font_size=32).to_corner(UL)
+        fusion_text = Text("2. Nuclear Fusion", color=RED, font_size=32).to_corner(UL)
         self.play(Write(fusion_text))
 
         deuterium = get_nucleus(1, 1, scale=1.8).shift(LEFT * 4)
@@ -135,7 +136,7 @@ class NuclearFissionFusion(Scene):
         self.remove(deuterium, tritium)
         self.add(he4, fn)
         
-        shockwave2 = Circle(radius=0.5, color=RED_A, stroke_width=25)
+        shockwave2 = Circle(radius=0.5, color=RED, stroke_width=25)
         glow = Dot(color=WHITE, radius=8, fill_opacity=0.9)
         
         self.add(glow)
@@ -156,7 +157,7 @@ class NuclearFissionFusion(Scene):
         
         # --- OUTRO ---
         self.play(FadeOut(Group(*self.mobjects)))
-        outro = MarkupText("<gradient from='BLUE' to='GREEN'>Animation Complete</gradient>")
+        outro = Text("Animation Complete", font_size=40, gradient=(BLUE, GREEN))
         self.play(Write(outro))
         self.wait(2)
 """
@@ -175,7 +176,7 @@ async def run_pyrofork_bot():
     async def handle_start(client, message):
         welcome_msg = (
             "👋 **Welcome to the Processing Bot!**\n\n"
-            "I am running in the background of a Streamlit Cloud server.\n\n"
+            "I am running securely in the background of a Streamlit Cloud server.\n\n"
             "**What I can do:**\n"
             "🖼️ **Send an Image:** Process with OpenCV (Canny Edge Detection).\n"
             "🎬 **`/generate`:** Render an advanced 720p HD physics animation using Manim."
@@ -191,10 +192,11 @@ async def run_pyrofork_bot():
             with open("nuclear_scene.py", "w") as f:
                 f.write(MANIM_CODE)
             
-            # -qm renders in Medium Quality (720p at 30 fps) for smooth HD video playback
+            # FIXED: Disabled progress bars to save RAM and keep error logs clean
             command = [
                 sys.executable, "-m", "manim", 
                 "-qm", 
+                "--progress_bar", "none",
                 "nuclear_scene.py", 
                 "NuclearFissionFusion", 
                 "--media_dir", "./manim_media"
@@ -204,7 +206,6 @@ async def run_pyrofork_bot():
             if process.returncode != 0:
                 raise Exception(f"Manim Engine Error:\n{process.stderr}")
 
-            # Find any .mp4 file rendered recursively inside the output directory
             video_files = glob.glob("./manim_media/**/*.mp4", recursive=True)
             if not video_files:
                 raise FileNotFoundError("Video file was not found after rendering.")
@@ -220,10 +221,14 @@ async def run_pyrofork_bot():
             await msg.delete()
             
         except Exception as e:
-            await msg.edit_text(f"❌ An error occurred:\n\n{str(e)}")
+            # Clean up the output to hide harmless syntax warnings from the user
+            error_str = str(e)
+            if "SyntaxWarning" in error_str:
+                error_str = "\n".join([line for line in error_str.split("\n") if "SyntaxWarning" not in line])
+                
+            await msg.edit_text(f"❌ An error occurred:\n\n{error_str}")
         
         finally:
-            # Cleanup temporary files and trigger garbage collection
             if os.path.exists("nuclear_scene.py"):
                 os.remove("nuclear_scene.py")
             if os.path.exists("./manim_media"):
@@ -291,7 +296,7 @@ start_bot_thread()
 
 # 6. Streamlit UI
 st.title("Pyrofork + Manim + CV2 Bot ⚡")
-st.write("The bot is running perfectly in the background.")
+st.write("The bot is running securely in the background.")
 st.markdown("* Send an **Image** to run OpenCV Edge Detection.")
 st.markdown("* Type **`/start`** to see the welcome menu.")
 st.markdown("* Type **`/generate`** to render an advanced nuclear physics animation using Manim.")
