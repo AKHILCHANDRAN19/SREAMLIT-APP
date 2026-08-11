@@ -19,7 +19,6 @@ import random
 class NuclearFissionFusion(Scene):
     def construct(self):
         # --- INTRO ---
-        # Fixed: Using native Text gradients instead of MarkupText to prevent Pango crashes
         title = Text("Advanced Nuclear Physics", font_size=48, gradient=(RED, YELLOW))
         subtitle = Text("Fission & Fusion Dynamics", font_size=32, color=BLUE)
         intro_group = VGroup(title, subtitle).arrange(DOWN, buff=0.5)
@@ -29,7 +28,6 @@ class NuclearFissionFusion(Scene):
         self.wait(1)
         self.play(FadeOut(intro_group, shift=UP))
         
-        # --- HELPER: REALISTIC NUCLEUS GENERATOR ---
         def get_nucleus(p_count, n_count, scale=1.0):
             particles = VGroup()
             for _ in range(p_count):
@@ -37,7 +35,6 @@ class NuclearFissionFusion(Scene):
             for _ in range(n_count):
                 particles.add(Dot(color=BLUE, radius=0.15 * scale).set_z_index(1))
             
-            # Random tight clustering to look like a real atom
             for dot in particles:
                 r = random.uniform(0, 0.4 * (p_count+n_count)**0.4 * scale)
                 theta = random.uniform(0, 2 * PI)
@@ -48,14 +45,12 @@ class NuclearFissionFusion(Scene):
         fission_text = Text("1. Nuclear Fission", color=YELLOW, font_size=32).to_corner(UL)
         self.play(Write(fission_text))
 
-        # U-235 Nucleus
         u235 = get_nucleus(15, 20) 
         u235.move_to(ORIGIN)
         u235_label = Text("Uranium-235", font_size=24).next_to(u235, DOWN * 2)
         
         self.play(FadeIn(u235, scale=0.5), FadeIn(u235_label))
         
-        # Incident Neutron with glowing trail
         neutron = Dot(color=WHITE, radius=0.1).move_to(LEFT * 6)
         n_label = Text("n", font_size=20).next_to(neutron, UP)
         n_group = VGroup(neutron, n_label)
@@ -65,11 +60,9 @@ class NuclearFissionFusion(Scene):
         
         self.play(FadeIn(n_group))
         
-        # Neutron strikes the nucleus
         self.play(n_group.animate.move_to(u235.get_left()), run_time=1.2, rate_func=rush_into)
         self.remove(trace)
         
-        # U-236 Instability wobble
         self.play(
             FadeOut(n_group), 
             u235.animate.set_color(ORANGE), 
@@ -81,7 +74,6 @@ class NuclearFissionFusion(Scene):
             self.play(u235.animate.stretch(0.7, 0).stretch(1.3, 1), run_time=0.1)
         self.play(u235.animate.stretch(1.0, 0).stretch(1.0, 1), run_time=0.1)
         
-        # The Split
         ba141 = get_nucleus(8, 10).move_to(u235.get_center())
         kr92 = get_nucleus(7, 10).move_to(u235.get_center())
         n1, n2, n3 = [Dot(color=WHITE, radius=0.1).move_to(u235.get_center()) for _ in range(3)]
@@ -89,10 +81,10 @@ class NuclearFissionFusion(Scene):
         self.remove(u235, u235_label)
         self.add(ba141, kr92, n1, n2, n3)
         
-        # Cinematic Shockwave & Energy
         shockwave = Circle(radius=0.5, color=YELLOW, stroke_width=20).move_to(u235.get_center())
         energy_text = Text("Energy Released! (200 MeV)", color=YELLOW, font_size=30)
         
+        # Fixed: Explicitly calling rate_functions mapping for stability
         self.play(
             ba141.animate.shift(UP * 2.5 + LEFT * 3),
             kr92.animate.shift(DOWN * 2.5 + RIGHT * 3),
@@ -102,7 +94,7 @@ class NuclearFissionFusion(Scene):
             shockwave.animate.scale(20).set_opacity(0),
             FadeIn(energy_text, scale=1.5),
             run_time=1.5,
-            rate_func=ease_out_expo
+            rate_func=rate_functions.ease_out_sine
         )
         self.wait(1.5)
         self.play(FadeOut(VGroup(ba141, kr92, n1, n2, n3, energy_text, fission_text)))
@@ -120,7 +112,6 @@ class NuclearFissionFusion(Scene):
         self.play(FadeIn(deuterium, shift=RIGHT), FadeIn(d_label), FadeIn(tritium, shift=LEFT), FadeIn(t_label))
         self.wait(0.5)
 
-        # High-speed collision
         self.play(
             deuterium.animate.move_to(ORIGIN),
             tritium.animate.move_to(ORIGIN),
@@ -129,7 +120,6 @@ class NuclearFissionFusion(Scene):
             rate_func=rush_into
         )
 
-        # Impact Flash & Results
         he4 = get_nucleus(2, 2, scale=1.8).move_to(ORIGIN)
         fn = Dot(color=WHITE, radius=0.15).move_to(ORIGIN)
         
@@ -146,7 +136,7 @@ class NuclearFissionFusion(Scene):
             he4.animate.shift(LEFT * 2.5),
             fn.animate.shift(RIGHT * 6),
             run_time=1.5,
-            rate_func=ease_out_expo
+            rate_func=rate_functions.ease_out_sine
         )
         
         he4_label = Text("Helium-4", font_size=24).next_to(he4, DOWN * 2)
@@ -192,7 +182,11 @@ async def run_pyrofork_bot():
             with open("nuclear_scene.py", "w") as f:
                 f.write(MANIM_CODE)
             
-            # FIXED: Disabled progress bars to save RAM and keep error logs clean
+            # Gag the obnoxious pydub syntax warnings so they don't crash or pollute logs
+            env = os.environ.copy()
+            env["PYTHONWARNINGS"] = "ignore::SyntaxWarning"
+            
+            # -qm renders in Medium Quality (720p at 30 fps)
             command = [
                 sys.executable, "-m", "manim", 
                 "-qm", 
@@ -201,7 +195,7 @@ async def run_pyrofork_bot():
                 "NuclearFissionFusion", 
                 "--media_dir", "./manim_media"
             ]
-            process = subprocess.run(command, capture_output=True, text=True)
+            process = subprocess.run(command, capture_output=True, text=True, env=env)
             
             if process.returncode != 0:
                 raise Exception(f"Manim Engine Error:\n{process.stderr}")
@@ -221,12 +215,7 @@ async def run_pyrofork_bot():
             await msg.delete()
             
         except Exception as e:
-            # Clean up the output to hide harmless syntax warnings from the user
-            error_str = str(e)
-            if "SyntaxWarning" in error_str:
-                error_str = "\n".join([line for line in error_str.split("\n") if "SyntaxWarning" not in line])
-                
-            await msg.edit_text(f"❌ An error occurred:\n\n{error_str}")
+            await msg.edit_text(f"❌ An error occurred:\n\n{str(e)}")
         
         finally:
             if os.path.exists("nuclear_scene.py"):
@@ -300,3 +289,4 @@ st.write("The bot is running securely in the background.")
 st.markdown("* Send an **Image** to run OpenCV Edge Detection.")
 st.markdown("* Type **`/start`** to see the welcome menu.")
 st.markdown("* Type **`/generate`** to render an advanced nuclear physics animation using Manim.")
+
