@@ -8,10 +8,10 @@ import os
 import subprocess
 import glob
 import shutil
+import sys
 from pyrogram import Client, filters
 
 # 1. Define the Manim animation code as a string
-# This is isolated and written to a temporary file later to protect your server's RAM.
 MANIM_CODE = """from manim import *
 
 class NuclearFissionFusion(Scene):
@@ -40,7 +40,6 @@ class NuclearFissionFusion(Scene):
         unstable = Text("Unstable Nucleus", font_size=24, color=YELLOW).next_to(nucleus, UP)
         self.play(Write(unstable))
         
-        # Vibrate (Fission instability)
         for _ in range(3):
             self.play(nucleus.animate.shift(RIGHT*0.1), run_time=0.1)
             self.play(nucleus.animate.shift(LEFT*0.2), run_time=0.1)
@@ -107,47 +106,55 @@ async def run_pyrofork_bot():
         bot_token=st.secrets["BOT_TOKEN"]
     )
 
-    # --- HANDLER 1: MANIM VIDEO GENERATION ---
+    # --- HANDLER 1: THE /START COMMAND ---
+    @app.on_message(filters.command("start") & filters.private)
+    async def handle_start(client, message):
+        welcome_msg = (
+            "👋 **Welcome to the Processing Bot!**\n\n"
+            "I am running in the background of a Streamlit Cloud server.\n\n"
+            "**What I can do:**\n"
+            "🖼️ **Send an Image:** I will process it with OpenCV (Canny Edge Detection).\n"
+            "🎬 **`/generate`:** I will render a ~30s nuclear physics animation using Manim."
+        )
+        await message.reply_text(welcome_msg)
+
+    # --- HANDLER 2: MANIM VIDEO GENERATION ---
     @app.on_message(filters.command("generate") & filters.private)
     async def handle_generate(client, message):
-        msg = await message.reply_text("☢️ Initializing Manim engine... Generating nuclear physics animation. This will take a few minutes. ⏳")
+        msg = await message.reply_text("☢️ Initializing Manim engine... Generating animation. This will take a few minutes. ⏳")
         
         try:
-            # 1. Write the Manim script to a temporary file
             with open("nuclear_scene.py", "w") as f:
                 f.write(MANIM_CODE)
             
-            # 2. Run Manim CLI in a separate process. (-ql = Low Quality 480p, 15fps. Optimal for weak cloud CPU)
-            command = ["python", "-m", "manim", "-ql", "nuclear_scene.py", "NuclearFissionFusion", "--media_dir", "./manim_media"]
+            # The Fix: Use sys.executable instead of "python" to ensure the virtual env is used
+            command = [sys.executable, "-m", "manim", "-ql", "nuclear_scene.py", "NuclearFissionFusion", "--media_dir", "./manim_media"]
             process = subprocess.run(command, capture_output=True, text=True)
             
             if process.returncode != 0:
                 raise Exception(f"Manim Engine Error:\n{process.stderr}")
 
-            # 3. Locate the generated MP4 file
             video_files = glob.glob("./manim_media/videos/nuclear_scene/480p15/NuclearFissionFusion.mp4")
             if not video_files:
                 raise FileNotFoundError("Video was not successfully generated.")
                 
             video_path = video_files[0]
             
-            # 4. Send the video back
             await msg.edit_text("✅ Animation complete! Uploading to Telegram...")
             await message.reply_video(video=video_path, caption="⚛️ Nuclear Fission & Fusion Animation")
             await msg.delete()
             
         except Exception as e:
-            await msg.edit_text(f"❌ An error occurred: {str(e)}")
+            await msg.edit_text(f"❌ An error occurred:\n\n{str(e)}")
         
         finally:
-            # 5. Clean up files and force aggressive garbage collection
             if os.path.exists("nuclear_scene.py"):
                 os.remove("nuclear_scene.py")
             if os.path.exists("./manim_media"):
                 shutil.rmtree("./manim_media", ignore_errors=True)
             gc.collect()
 
-    # --- HANDLER 2: OPENCV PHOTO PROCESSING ---
+    # --- HANDLER 3: OPENCV PHOTO PROCESSING ---
     @app.on_message(filters.photo & filters.private)
     async def handle_photo(client, message):
         processing_msg = await message.reply_text("Processing your image...")
@@ -170,7 +177,6 @@ async def run_pyrofork_bot():
             )
             await processing_msg.delete()
             
-            # Explicitly delete heavy OpenCV arrays
             del img
             del gray
             del edges
@@ -179,7 +185,6 @@ async def run_pyrofork_bot():
             await processing_msg.edit_text(f"An error occurred: {str(e)}")
             
         finally:
-            # Clean up cloud storage and RAM
             if file_path and os.path.exists(file_path):
                 os.remove(file_path)
             if os.path.exists(processed_path):
@@ -212,4 +217,5 @@ start_bot_thread()
 st.title("Pyrofork + Manim + CV2 Bot ⚡")
 st.write("The bot is running perfectly in the background.")
 st.markdown("* Send an **Image** to run OpenCV Edge Detection.")
+st.markdown("* Type **`/start`** to see the welcome menu.")
 st.markdown("* Type **`/generate`** to render a nuclear physics animation using Manim.")
