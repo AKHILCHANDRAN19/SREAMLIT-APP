@@ -3,3 +3,4 @@ pyrofork
 beautifulsoup4
 curl-cffi
 requests
+tgcrypto
