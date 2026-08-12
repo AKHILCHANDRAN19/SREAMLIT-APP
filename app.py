@@ -18,6 +18,50 @@ except ImportError:
     USE_CURL_CFFI = False
 
 
+# --- ALPHABET TO MALAYALAM PHONETICS ---
+ALPHA_TO_ML = {
+    'A': 'എ', 'B': 'ബി', 'C': 'സി', 'D': 'ഡി', 'E': 'ഇ', 'F': 'എഫ്',
+    'G': 'ജി', 'H': 'എച്ച്', 'I': 'ഐ', 'J': 'ജെ', 'K': 'കെ', 'L': 'എൽ',
+    'M': 'എം', 'N': 'എൻ', 'O': 'ഓ', 'P': 'പി', 'Q': 'ക്യു', 'R': 'ആർ',
+    'S': 'എസ്', 'T': 'ടി', 'U': 'യു', 'V': 'വി', 'W': 'ഡബ്ല്യു', 'X': 'എക്സ്',
+    'Y': 'വൈ', 'Z': 'സെഡ്'
+}
+
+# --- DIGIT TO MALAYALAM PHONETICS (DIGIT-BY-DIGIT) ---
+DIGITS_TO_ML = {
+    '0': 'പൂജ്യം',
+    '1': 'ഒന്ന്',
+    '2': 'രണ്ട്',
+    '3': 'മൂന്ന്',
+    '4': 'നാല്',
+    '5': 'അഞ്ച്',
+    '6': 'ആറ്',
+    '7': 'ഏഴ്',
+    '8': 'എട്ട്',
+    '9': 'ഒമ്പത്'
+}
+
+def alpha_to_ml(text: str) -> str:
+    """Converts English series letters to Malayalam pronunciation."""
+    res = []
+    for char in text.upper():
+        if char in ALPHA_TO_ML:
+            res.append(ALPHA_TO_ML[char])
+        elif char.isspace():
+            res.append(" ")
+        else:
+            res.append(char)
+    return " ".join("".join(res).split())
+
+
+def digits_to_ml(val_str: str) -> str:
+    """Converts each digit in a string to its individual Malayalam word (e.g. 319327 -> മൂന്ന് ഒന്ന് ഒമ്പത് മൂന്ന് രണ്ട് ഏഴ്)."""
+    val_str = val_str.strip()
+    if not val_str:
+        return ""
+    return " ".join([DIGITS_TO_ML.get(d, d) for d in val_str])
+
+
 # --- HTTP HELPER ---
 def http_get(url: str):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -29,7 +73,7 @@ def http_get(url: str):
 # --- 1. SCRAPING & PARSING LOGIC ---
 
 def fetch_last_10_draws():
-    """Scrapes main page table (0.txt) and returns the top 10 lottery draws."""
+    """Scrapes main page table and returns top 10 lottery draws."""
     base_url = "https://www.keralalotteries.net/?m=1"
     draws = []
     
@@ -65,7 +109,7 @@ def fetch_last_10_draws():
 
 
 def parse_lottery_result_page(target_url: str):
-    """Scrapes individual result page (1.txt) and extracts ONLY winning numbers."""
+    """Scrapes individual result page and builds structured output + digit-by-digit Malayalam TTS."""
     try:
         res = http_get(target_url)
         soup = BeautifulSoup(res.text, 'html.parser')
@@ -89,16 +133,8 @@ def parse_lottery_result_page(target_url: str):
         series_str = series_match.group(1).strip() if series_match else "N/A"
 
         prize_headers = [
-            ("1st Prize", "1st Prize"),
-            ("Consolation Prize", "Consolation Prize"),
-            ("2nd Prize", "2nd Prize"),
-            ("3rd Prize", "3rd Prize"),
-            ("4th Prize", "4th Prize"),
-            ("5th Prize", "5th Prize"),
-            ("6th Prize", "6th Prize"),
-            ("7th Prize", "7th Prize"),
-            ("8th Prize", "8th Prize"),
-            ("9th Prize", "9th Prize")
+            "1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize",
+            "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"
         ]
 
         stop_phrases = [
@@ -109,48 +145,45 @@ def parse_lottery_result_page(target_url: str):
         ]
 
         prizes_data = {}
+        prize_headings = {}
         current_prize_key = None
 
         for line in lines:
             line_lower = line.lower()
 
-            # Stop parsing immediately when footer/disclaimer sections are reached
             if any(sp in line_lower for sp in stop_phrases):
                 current_prize_key = None
                 continue
 
-            # Detect Prize Header
             matched_header = None
-            for search_str, key_name in prize_headers:
-                if search_str.lower() in line_lower:
-                    matched_header = key_name
+            for ph in prize_headers:
+                if ph.lower() in line_lower:
+                    matched_header = ph
                     break
 
             if matched_header:
                 current_prize_key = matched_header
                 if current_prize_key not in prizes_data:
                     prizes_data[current_prize_key] = []
+                    heading_clean = re.sub(r'\s+', ' ', line).strip()
+                    heading_clean = re.sub(r'(' + re.escape(matched_header) + r')\s*(Rs\.)', r'\1 - \2', heading_clean, flags=re.IGNORECASE)
+                    prize_headings[current_prize_key] = heading_clean
                 continue
 
-            # Strict extraction based on active prize category
             if current_prize_key:
-                # 1st, 2nd, 3rd Prize: Look for Ticket Series + 6 Digits + Optional District
-                if current_prize_key in ["1st Prize", "2nd Prize", "3rd Prize"]:
+                if (line.startswith("(") and line.endswith(")")) or line == "..." or line == "---":
+                    continue
+
+                if current_prize_key in ["1st Prize", "2nd Prize", "3rd Prize", "Consolation Prize"]:
                     if re.search(r'^[A-Z]{2}\s*\d{6}', line):
                         prizes_data[current_prize_key].append(line)
 
-                # Consolation Prize: Look for Series + 6 Digits
-                elif current_prize_key == "Consolation Prize":
-                    if re.search(r'^[A-Z]{2}\s*\d{6}', line):
-                        prizes_data[current_prize_key].append(line)
-
-                # 4th to 9th Prize: Extract ONLY 4-digit numbers
                 elif current_prize_key in ["4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]:
                     four_digits = re.findall(r'\b\d{4}\b', line)
                     if four_digits:
                         prizes_data[current_prize_key].extend(four_digits)
 
-        # Build clean output
+        # Build Clean Text Output
         output = [
             f"🎟️ **{clean_title}**",
             f"📅 **Date:** `{draw_date}`",
@@ -171,14 +204,62 @@ def parse_lottery_result_page(target_url: str):
             ("9th Prize", "9️⃣")
         ]
 
-        for p_name, emoji in prize_order:
-            if p_name in prizes_data and prizes_data[p_name]:
-                vals = prizes_data[p_name]
-                if p_name in ["4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]:
+        for p_key, emoji in prize_order:
+            if p_key in prizes_data and prizes_data[p_key]:
+                heading_text = prize_headings.get(p_key, p_key)
+                vals = prizes_data[p_key]
+                if p_key in ["4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]:
                     formatted_val = "  ".join(vals)
                 else:
                     formatted_val = "\n".join(vals)
-                output.append(f"{emoji} **{p_name}**\n`{formatted_val}`\n")
+                output.append(f"{emoji} **{heading_text}**\n`{formatted_val}`\n")
+
+        # --- MALAYALAM TTS PRONUNCIATION SECTION (DIGIT-BY-DIGIT, 1st to 6th Prize + Consolation) ---
+        tts_order = [
+            ("1st Prize", "🏆"),
+            ("Consolation Prize", "🎁"),
+            ("2nd Prize", "🥈"),
+            ("3rd Prize", "🥉"),
+            ("4th Prize", "4️⃣"),
+            ("5th Prize", "5️⃣"),
+            ("6th Prize", "6️⃣")
+        ]
+
+        ml_section = [
+            "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "🗣️ **Malayalam Pronunciation (for TTS - 1st to 6th Prize):**\n"
+        ]
+
+        has_tts_content = False
+
+        for p_key, emoji in tts_order:
+            if p_key in prizes_data and prizes_data[p_key]:
+                has_tts_content = True
+                heading_text = prize_headings.get(p_key, p_key)
+                ml_lines = []
+
+                for item in prizes_data[p_key]:
+                    match_series = re.match(r'^([A-Z]{2})\s*(\d{6})(.*)$', item)
+                    if match_series:
+                        s_code = match_series.group(1)
+                        n_code = match_series.group(2)
+                        extra_dist = match_series.group(3).strip()
+
+                        s_ml = alpha_to_ml(s_code)
+                        n_ml = digits_to_ml(n_code)
+                        ml_lines.append(f"{s_ml} {n_ml} {extra_dist}".strip())
+                    else:
+                        four_digit_match = re.findall(r'\b\d{4}\b', item)
+                        if four_digit_match:
+                            words_list = [digits_to_ml(num) for num in four_digit_match]
+                            ml_lines.append("  |  ".join(words_list))
+                        else:
+                            ml_lines.append(item)
+
+                ml_section.append(f"{emoji} **{heading_text}**\n`" + "\n".join(ml_lines) + "`\n")
+
+        if has_tts_content:
+            output.extend(ml_section)
 
         return "\n".join(output)
 
@@ -329,4 +410,4 @@ def start_bot_thread():
 start_bot_thread()
 
 st.title("Kerala Lottery Bot 🍀")
-st.write("Pyrofork bot active with `/generate` and `/gencustom` commands.")
+st.write("Pyrofork bot active with digit-by-digit Malayalam TTS & Prize Money parser.")
