@@ -1,6 +1,5 @@
 streamlit
-opencv-python-headless
-numpy
 pyrofork
-TgCrypto
-manim
+beautifulsoup4
+curl-cffi
+requests
