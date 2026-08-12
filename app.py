@@ -49,7 +49,6 @@ def fetch_last_10_draws():
                     d_str = date_match.group(0)
                     url = a_tag['href']
                     title = tds[1].get_text(strip=True).replace('\n', ' ')
-                    # Clean up title suffix
                     title = re.sub(r'\s*Official Result$', '', title, flags=re.IGNORECASE)
                     
                     if not any(d['date'] == d_str for d in draws):
@@ -59,14 +58,14 @@ def fetch_last_10_draws():
                 break
                 
         return draws
-    except Exception as e:
+    except Exception:
         return []
     finally:
         gc.collect()
 
 
 def parse_lottery_result_page(target_url: str):
-    """Scrapes individual result page (1.txt) and extracts formatted prizes."""
+    """Scrapes individual result page (1.txt) and extracts ONLY winning numbers."""
     try:
         res = http_get(target_url)
         soup = BeautifulSoup(res.text, 'html.parser')
@@ -80,80 +79,106 @@ def parse_lottery_result_page(target_url: str):
 
         # Extract Header Details
         h1_tag = soup.find('h1', class_='entry-title')
-        lottery_name = h1_tag.get_text(strip=True) if h1_tag else "Kerala Lottery Result"
-        lottery_name = re.sub(r'Official|Result|Today', '', lottery_name, flags=re.IGNORECASE).strip()
+        raw_title = h1_tag.get_text(strip=True) if h1_tag else "Kerala Lottery Result"
+        clean_title = re.sub(r'Kerala Lottery Results:|\bOfficial\b|\bResult\b|\bToday\b', '', raw_title, flags=re.IGNORECASE).strip()
 
-        date_match = re.search(r'Date of Draw:\s*(\d{1,2}[/-]\d{2}[/-]\d{4})', full_text)
-        if not date_match:
-            date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', lottery_name)
+        date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', full_text)
         draw_date = date_match.group(1).replace('/', '-') if date_match else "N/A"
 
         series_match = re.search(r'Today Lottery Series:\s*([A-Z0-9,\s]+)', full_text)
         series_str = series_match.group(1).strip() if series_match else "N/A"
 
-        # Noise filters to exclude
-        noise_keywords = [
-            "Kerala State Lotteries Results Official", "കേരള സംസ്ഥാന ഭാഗ്യക്കുറി",
-            "Check Winning List", "Prize Details", "one of the seven weekly lotteries",
-            "108 lakh tickets were issued", "Next Upcoming Bumper", "Thiruvonam Bumper",
-            "Gorky Bhavan", "Near Bakery Junction", "KERALA LOTTERY TODAY RESULT",
-            "Today LIVE Kerala Lottery Result", "ഇന്നത്തെ കേരളാ ലോട്ടറി",
-            "തത്സമയ നറുക്കെടുപ്പ്", "Winners Numbers", "Agent Name", "Agency No",
-            "The prize winners are advised to verify", "Next Dhanalekshmi", "Next Sthree",
-            "Repeated Draw Numbers", "Tomorrow draw details", "Kerala Lotteries Releases",
-            "Previous Lottery Results", "Back to HOME", "Share This", "Frequently Asked Questions",
-            "At which time does", "What is a Lottery", "Is online lottery permitted",
-            "Can Kerala Lottery be purchased", "Who is the authority", "Is it mandatory",
-            "PDF Images", "---", "For The Tickets Ending with The Following Numbers"
-        ]
-
         prize_headers = [
-            "1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize",
-            "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"
+            ("1st Prize", "1st Prize"),
+            ("Consolation Prize", "Consolation Prize"),
+            ("2nd Prize", "2nd Prize"),
+            ("3rd Prize", "3rd Prize"),
+            ("4th Prize", "4th Prize"),
+            ("5th Prize", "5th Prize"),
+            ("6th Prize", "6th Prize"),
+            ("7th Prize", "7th Prize"),
+            ("8th Prize", "8th Prize"),
+            ("9th Prize", "9th Prize")
         ]
 
-        prizes = {}
-        current_prize = None
+        stop_phrases = [
+            "verify the winning numbers", "government gazette",
+            "repeated draw numbers", "tomorrow draw details",
+            "previous results", "share this", "facebook", "twitter",
+            "frequently asked questions", "a total of", "agent's commission"
+        ]
+
+        prizes_data = {}
+        current_prize_key = None
 
         for line in lines:
-            if any(nk.lower() in line.lower() for nk in noise_keywords):
+            line_lower = line.lower()
+
+            # Stop parsing immediately when footer/disclaimer sections are reached
+            if any(sp in line_lower for sp in stop_phrases):
+                current_prize_key = None
                 continue
-            
+
+            # Detect Prize Header
             matched_header = None
-            for ph in prize_headers:
-                if ph.lower() in line.lower():
-                    matched_header = ph
+            for search_str, key_name in prize_headers:
+                if search_str.lower() in line_lower:
+                    matched_header = key_name
                     break
-            
+
             if matched_header:
-                current_prize = matched_header
-                if current_prize not in prizes:
-                    prizes[current_prize] = []
+                current_prize_key = matched_header
+                if current_prize_key not in prizes_data:
+                    prizes_data[current_prize_key] = []
                 continue
 
-            if current_prize:
-                if (line.startswith("(") and line.endswith(")")) or line == "..." or line == "---":
-                    continue
-                prizes[current_prize].append(line)
+            # Strict extraction based on active prize category
+            if current_prize_key:
+                # 1st, 2nd, 3rd Prize: Look for Ticket Series + 6 Digits + Optional District
+                if current_prize_key in ["1st Prize", "2nd Prize", "3rd Prize"]:
+                    if re.search(r'^[A-Z]{2}\s*\d{6}', line):
+                        prizes_data[current_prize_key].append(line)
 
-        # Build clean formatted Telegram output
+                # Consolation Prize: Look for Series + 6 Digits
+                elif current_prize_key == "Consolation Prize":
+                    if re.search(r'^[A-Z]{2}\s*\d{6}', line):
+                        prizes_data[current_prize_key].append(line)
+
+                # 4th to 9th Prize: Extract ONLY 4-digit numbers
+                elif current_prize_key in ["4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]:
+                    four_digits = re.findall(r'\b\d{4}\b', line)
+                    if four_digits:
+                        prizes_data[current_prize_key].extend(four_digits)
+
+        # Build clean output
         output = [
-            f"🎟️ **{lottery_name}**",
+            f"🎟️ **{clean_title}**",
             f"📅 **Date:** `{draw_date}`",
             f"🔢 **Series:** `{series_str}`",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         ]
 
-        prize_emojis = {
-            "1st Prize": "🏆", "Consolation Prize": "🎁", "2nd Prize": "🥈",
-            "3rd Prize": "🥉", "4th Prize": "4️⃣", "5th Prize": "5️⃣",
-            "6th Prize": "6️⃣", "7th Prize": "7️⃣", "8th Prize": "8️⃣", "9th Prize": "9️⃣"
-        }
+        prize_order = [
+            ("1st Prize", "🏆"),
+            ("Consolation Prize", "🎁"),
+            ("2nd Prize", "🥈"),
+            ("3rd Prize", "🥉"),
+            ("4th Prize", "4️⃣"),
+            ("5th Prize", "5️⃣"),
+            ("6th Prize", "6️⃣"),
+            ("7th Prize", "7️⃣"),
+            ("8th Prize", "8️⃣"),
+            ("9th Prize", "9️⃣")
+        ]
 
-        for prize_name, numbers in prizes.items():
-            emoji = prize_emojis.get(prize_name, "⭐")
-            formatted_numbers = "\n".join(numbers) if numbers else "Awaiting Draw..."
-            output.append(f"{emoji} **{prize_name}**\n`{formatted_numbers}`\n")
+        for p_name, emoji in prize_order:
+            if p_name in prizes_data and prizes_data[p_name]:
+                vals = prizes_data[p_name]
+                if p_name in ["4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]:
+                    formatted_val = "  ".join(vals)
+                else:
+                    formatted_val = "\n".join(vals)
+                output.append(f"{emoji} **{p_name}**\n`{formatted_val}`\n")
 
         return "\n".join(output)
 
@@ -192,7 +217,6 @@ async def run_pyrofork_bot():
             await msg.edit_text("❌ Could not retrieve lottery list from main page.")
             return
 
-        # Top item is today's draw
         result_text = parse_lottery_result_page(draws[0]['url'])
         chunks = [result_text[i:i+4000] for i in range(0, len(result_text), 4000)]
         
@@ -225,10 +249,8 @@ async def run_pyrofork_bot():
             cmd_date = d_str.replace('-', '_')
             title = item['title']
             
-            # Clickable command link format in Telegram
             text_lines.append(f"• **{d_str}** - {title}\n  👉 `/get_{cmd_date}`\n")
             
-            # Interactive Inline Keyboard Button
             keyboard_buttons.append([
                 InlineKeyboardButton(f"📅 {d_str} | {title[:20]}...", callback_data=f"get_{cmd_date}")
             ])
@@ -237,7 +259,6 @@ async def run_pyrofork_bot():
         await message.reply_text("\n".join(text_lines), reply_markup=reply_markup)
         await msg.delete()
 
-    # --- DYNAMIC DATE COMMAND & CALLBACK HANDLERS ---
     async def process_date_request(message_or_query, date_key_str: str):
         target_date = date_key_str.replace('_', '-')
         
@@ -255,7 +276,6 @@ async def run_pyrofork_bot():
                 break
 
         if not target_url:
-            # Direct search on site if not in top 10
             target_url = f"https://www.keralalotteries.net/search?q={target_date}"
 
         result_text = parse_lottery_result_page(target_url)
