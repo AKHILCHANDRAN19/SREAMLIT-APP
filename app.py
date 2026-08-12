@@ -3,6 +3,7 @@ import asyncio
 import threading
 import re
 import gc
+import io
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from pyrogram import Client, filters
@@ -17,7 +18,6 @@ except ImportError:
     import requests as standard_requests
     USE_CURL_CFFI = False
 
-
 # --- ALPHABET TO MALAYALAM PHONETICS ---
 ALPHA_TO_ML = {
     'A': 'എ', 'B': 'ബി', 'C': 'സി', 'D': 'ഡി', 'E': 'ഇ', 'F': 'എഫ്',
@@ -27,39 +27,30 @@ ALPHA_TO_ML = {
     'Y': 'വൈ', 'Z': 'സെഡ്'
 }
 
-# --- DIGIT TO MALAYALAM PHONETICS (DIGIT-BY-DIGIT) ---
 DIGITS_TO_ML = {
-    '0': 'പൂജ്യം',
-    '1': 'ഒന്ന്',
-    '2': 'രണ്ട്',
-    '3': 'മൂന്ന്',
-    '4': 'നാല്',
-    '5': 'അഞ്ച്',
-    '6': 'ആറ്',
-    '7': 'ഏഴ്',
-    '8': 'എട്ട്',
-    '9': 'ഒമ്പത്'
+    '0': 'പൂജ്യം', '1': 'ഒന്ന്', '2': 'രണ്ട്', '3': 'മൂന്ന്', '4': 'നാല്',
+    '5': 'അഞ്ച്', '6': 'ആറ്', '7': 'ഏഴ്', '8': 'എട്ട്', '9': 'ഒമ്പത്'
 }
 
-def alpha_to_ml(text: str) -> str:
-    """Converts English series letters to Malayalam pronunciation."""
-    res = []
-    for char in text.upper():
-        if char in ALPHA_TO_ML:
-            res.append(ALPHA_TO_ML[char])
-        elif char.isspace():
-            res.append(" ")
-        else:
-            res.append(char)
-    return " ".join("".join(res).split())
+def to_tts_format(ticket_str: str) -> str:
+    """Converts ticket 'DF 319327 (VADAKARA)' to 'ഡി , എഫ് , മൂന്ന് , ഒന്ന് ... (VADAKARA)'."""
+    match_series = re.match(r'^([A-Z]{2})\s*(\d{6})(.*)$', ticket_str)
+    if match_series:
+        series = match_series.group(1)
+        number = match_series.group(2)
+        extra = match_series.group(3).strip()
 
-
-def digits_to_ml(val_str: str) -> str:
-    """Converts each digit in a string to its individual Malayalam word (e.g. 319327 -> മൂന്ന് ഒന്ന് ഒമ്പത് മൂന്ന് രണ്ട് ഏഴ്)."""
-    val_str = val_str.strip()
-    if not val_str:
-        return ""
-    return " ".join([DIGITS_TO_ML.get(d, d) for d in val_str])
+        s_parts = [ALPHA_TO_ML.get(c, c) for c in series]
+        n_parts = [DIGITS_TO_ML.get(d, d) for d in number]
+        
+        combined = " , ".join(s_parts + n_parts)
+        if extra:
+            combined += f" {extra}"
+        return combined
+    else:
+        # It's a 4-digit number
+        n_parts = [DIGITS_TO_ML.get(d, d) for d in ticket_str]
+        return " , ".join(n_parts)
 
 
 # --- HTTP HELPER ---
@@ -71,17 +62,14 @@ def http_get(url: str):
 
 
 # --- 1. SCRAPING & PARSING LOGIC ---
-
 def fetch_last_10_draws():
     """Scrapes main page table and returns top 10 lottery draws."""
     base_url = "https://www.keralalotteries.net/?m=1"
     draws = []
-    
     try:
         res = http_get(base_url)
         soup = BeautifulSoup(res.text, 'html.parser')
         rows = soup.find_all('tr')
-        
         for row in rows:
             tds = row.find_all('td')
             if len(tds) >= 2:
@@ -94,13 +82,11 @@ def fetch_last_10_draws():
                     url = a_tag['href']
                     title = tds[1].get_text(strip=True).replace('\n', ' ')
                     title = re.sub(r'\s*Official Result$', '', title, flags=re.IGNORECASE)
-                    
                     if not any(d['date'] == d_str for d in draws):
                         draws.append({'date': d_str, 'title': title, 'url': url})
                         
             if len(draws) >= 10:
                 break
-                
         return draws
     except Exception:
         return []
@@ -109,14 +95,13 @@ def fetch_last_10_draws():
 
 
 def parse_lottery_result_page(target_url: str):
-    """Scrapes individual result page and builds structured output + digit-by-digit Malayalam TTS."""
+    """Scrapes individual result page and returns (Text Message String, TTS Txt File String)."""
     try:
         res = http_get(target_url)
         soup = BeautifulSoup(res.text, 'html.parser')
-        
         post_body = soup.find('div', id=re.compile(r'post-body-'))
         if not post_body:
-            return "❌ Could not parse lottery result page body."
+            return "❌ Could not parse lottery result page body.", None
 
         full_text = post_body.get_text(separator='\n', strip=True)
         lines = [line.strip() for line in full_text.split('\n') if line.strip()]
@@ -137,11 +122,11 @@ def parse_lottery_result_page(target_url: str):
             "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"
         ]
 
-        stop_phrases = [
-            "verify the winning numbers", "government gazette",
-            "repeated draw numbers", "tomorrow draw details",
-            "previous results", "share this", "facebook", "twitter",
-            "frequently asked questions", "a total of", "agent's commission"
+        # Strictest cutoff: The moment any of these hit, we stop parsing lines entirely.
+        hard_stop_phrases = [
+            "prize winners are advised to verify", "government gazette",
+            "tomorrow draw details", "previous results", "share this",
+            "result (today) date:"
         ]
 
         prizes_data = {}
@@ -151,9 +136,9 @@ def parse_lottery_result_page(target_url: str):
         for line in lines:
             line_lower = line.lower()
 
-            if any(sp in line_lower for sp in stop_phrases):
-                current_prize_key = None
-                continue
+            # HARD STOP to eliminate noise (Social links, footer text, etc.)
+            if any(sp in line_lower for sp in hard_stop_phrases):
+                break
 
             matched_header = None
             for ph in prize_headers:
@@ -166,10 +151,12 @@ def parse_lottery_result_page(target_url: str):
                 if current_prize_key not in prizes_data:
                     prizes_data[current_prize_key] = []
                     heading_clean = re.sub(r'\s+', ' ', line).strip()
+                    # Format as: "1st Prize - Rs.1,00,00,000/-"
                     heading_clean = re.sub(r'(' + re.escape(matched_header) + r')\s*(Rs\.)', r'\1 - \2', heading_clean, flags=re.IGNORECASE)
                     prize_headings[current_prize_key] = heading_clean
                 continue
 
+            # Strict capture of ticket numbers ONLY
             if current_prize_key:
                 if (line.startswith("(") and line.endswith(")")) or line == "..." or line == "---":
                     continue
@@ -179,12 +166,13 @@ def parse_lottery_result_page(target_url: str):
                         prizes_data[current_prize_key].append(line)
 
                 elif current_prize_key in ["4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]:
+                    # Prevent scraping random text. Extract 4 digits only.
                     four_digits = re.findall(r'\b\d{4}\b', line)
                     if four_digits:
                         prizes_data[current_prize_key].extend(four_digits)
 
-        # Build Clean Text Output
-        output = [
+        # --- 1. BUILD REGULAR TELEGRAM MESSAGE ---
+        msg_output = [
             f"🎟️ **{clean_title}**",
             f"📅 **Date:** `{draw_date}`",
             f"🔢 **Series:** `{series_str}`",
@@ -192,16 +180,9 @@ def parse_lottery_result_page(target_url: str):
         ]
 
         prize_order = [
-            ("1st Prize", "🏆"),
-            ("Consolation Prize", "🎁"),
-            ("2nd Prize", "🥈"),
-            ("3rd Prize", "🥉"),
-            ("4th Prize", "4️⃣"),
-            ("5th Prize", "5️⃣"),
-            ("6th Prize", "6️⃣"),
-            ("7th Prize", "7️⃣"),
-            ("8th Prize", "8️⃣"),
-            ("9th Prize", "9️⃣")
+            ("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"),
+            ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"),
+            ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣")
         ]
 
         for p_key, emoji in prize_order:
@@ -212,59 +193,34 @@ def parse_lottery_result_page(target_url: str):
                     formatted_val = "  ".join(vals)
                 else:
                     formatted_val = "\n".join(vals)
-                output.append(f"{emoji} **{heading_text}**\n`{formatted_val}`\n")
+                msg_output.append(f"{emoji} **{heading_text}**\n`{formatted_val}`\n")
 
-        # --- MALAYALAM TTS PRONUNCIATION SECTION (DIGIT-BY-DIGIT, 1st to 6th Prize + Consolation) ---
+        final_msg_text = "\n".join(msg_output)
+
+        # --- 2. BUILD TTS .TXT FILE CONTENT (1st to 6th Prize) ---
         tts_order = [
-            ("1st Prize", "🏆"),
-            ("Consolation Prize", "🎁"),
-            ("2nd Prize", "🥈"),
-            ("3rd Prize", "🥉"),
-            ("4th Prize", "4️⃣"),
-            ("5th Prize", "5️⃣"),
-            ("6th Prize", "6️⃣")
+            ("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"),
+            ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣")
         ]
 
-        ml_section = [
-            "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            "🗣️ **Malayalam Pronunciation (for TTS - 1st to 6th Prize):**\n"
-        ]
-
-        has_tts_content = False
-
+        tts_output = []
         for p_key, emoji in tts_order:
             if p_key in prizes_data and prizes_data[p_key]:
-                has_tts_content = True
                 heading_text = prize_headings.get(p_key, p_key)
-                ml_lines = []
-
+                tts_output.append(f"{emoji} {heading_text}")
+                
                 for item in prizes_data[p_key]:
-                    match_series = re.match(r'^([A-Z]{2})\s*(\d{6})(.*)$', item)
-                    if match_series:
-                        s_code = match_series.group(1)
-                        n_code = match_series.group(2)
-                        extra_dist = match_series.group(3).strip()
+                    # Process and add comma-separated TTS format
+                    converted = to_tts_format(item)
+                    tts_output.append(converted)
+                tts_output.append("") # Empty line for spacing
 
-                        s_ml = alpha_to_ml(s_code)
-                        n_ml = digits_to_ml(n_code)
-                        ml_lines.append(f"{s_ml} {n_ml} {extra_dist}".strip())
-                    else:
-                        four_digit_match = re.findall(r'\b\d{4}\b', item)
-                        if four_digit_match:
-                            words_list = [digits_to_ml(num) for num in four_digit_match]
-                            ml_lines.append("  |  ".join(words_list))
-                        else:
-                            ml_lines.append(item)
+        final_tts_text = "\n".join(tts_output)
 
-                ml_section.append(f"{emoji} **{heading_text}**\n`" + "\n".join(ml_lines) + "`\n")
-
-        if has_tts_content:
-            output.extend(ml_section)
-
-        return "\n".join(output)
+        return final_msg_text, final_tts_text, draw_date
 
     except Exception as e:
-        return f"❌ Error parsing results: {str(e)}"
+        return f"❌ Error parsing results: {str(e)}", None, None
     finally:
         gc.collect()
 
@@ -289,29 +245,57 @@ async def run_pyrofork_bot():
         )
         await message.reply_text(welcome_msg)
 
-    @app.on_message(filters.command("generate") & filters.private)
-    async def handle_generate(client, message):
-        msg = await message.reply_text("🔎 **Fetching today's lottery result...**")
-        draws = fetch_last_10_draws()
+    async def execute_result_delivery(message_or_query, target_url: str):
+        """Helper to send the message chunks AND the TTS file"""
+        is_query = hasattr(message_or_query, 'edit_message_text')
         
-        if not draws:
-            await msg.edit_text("❌ Could not retrieve lottery list from main page.")
+        if is_query:
+            msg = await message_or_query.edit_message_text("🔎 **Fetching and Formatting Results...**")
+            chat_id = message_or_query.message.chat.id
+        else:
+            msg = await message_or_query.reply_text("🔎 **Fetching and Formatting Results...**")
+            chat_id = message_or_query.chat.id
+
+        result_text, tts_text, draw_date = parse_lottery_result_page(target_url)
+
+        if not tts_text: # Means an error occurred
+            await msg.edit_text(result_text)
             return
 
-        result_text = parse_lottery_result_page(draws[0]['url'])
+        # 1. Send the Main Text Result (Chunked)
         chunks = [result_text[i:i+4000] for i in range(0, len(result_text), 4000)]
-        
         try:
             for chunk in chunks:
-                await message.reply_text(chunk)
+                await app.send_message(chat_id, chunk)
                 await asyncio.sleep(1.5)
             await msg.delete()
+            
+            # 2. Send the TTS .txt file
+            if tts_text.strip():
+                tts_bytes = tts_text.encode('utf-8')
+                tts_file = io.BytesIO(tts_bytes)
+                tts_file.name = f"TTS_{draw_date}.txt"
+                
+                await app.send_document(
+                    chat_id=chat_id,
+                    document=tts_file,
+                    caption=f"🗣️ **Malayalam Pronunciation (for TTS)**\n📅 `{draw_date}`"
+                )
+
         except FloodWait as e:
             await asyncio.sleep(e.value)
         except Exception as e:
-            await msg.edit_text(f"❌ Error: {str(e)}")
+            await app.send_message(chat_id, f"❌ Error sending data: {str(e)}")
         finally:
             gc.collect()
+
+    @app.on_message(filters.command("generate") & filters.private)
+    async def handle_generate(client, message):
+        draws = fetch_last_10_draws()
+        if not draws:
+            await message.reply_text("❌ Could not retrieve lottery list from main page.")
+            return
+        await execute_result_delivery(message, draws[0]['url'])
 
     @app.on_message(filters.command("gencustom") & filters.private)
     async def handle_gencustom(client, message):
@@ -331,7 +315,6 @@ async def run_pyrofork_bot():
             title = item['title']
             
             text_lines.append(f"• **{d_str}** - {title}\n  👉 `/get_{cmd_date}`\n")
-            
             keyboard_buttons.append([
                 InlineKeyboardButton(f"📅 {d_str} | {title[:20]}...", callback_data=f"get_{cmd_date}")
             ])
@@ -340,60 +323,36 @@ async def run_pyrofork_bot():
         await message.reply_text("\n".join(text_lines), reply_markup=reply_markup)
         await msg.delete()
 
-    async def process_date_request(message_or_query, date_key_str: str):
-        target_date = date_key_str.replace('_', '-')
-        
-        if hasattr(message_or_query, 'edit_message_text'):
-            msg = await message_or_query.edit_message_text(f"🔎 **Fetching results for {target_date}...**")
-        else:
-            msg = await message_or_query.reply_text(f"🔎 **Fetching results for {target_date}...**")
-
-        draws = fetch_last_10_draws()
-        target_url = None
-        
-        for d in draws:
-            if d['date'] == target_date:
-                target_url = d['url']
-                break
-
-        if not target_url:
-            target_url = f"https://www.keralalotteries.net/search?q={target_date}"
-
-        result_text = parse_lottery_result_page(target_url)
-        chunks = [result_text[i:i+4000] for i in range(0, len(result_text), 4000)]
-
-        try:
-            for chunk in chunks:
-                if hasattr(message_or_query, 'message'):
-                    await message_or_query.message.reply_text(chunk)
-                else:
-                    await message_or_query.reply_text(chunk)
-                await asyncio.sleep(1.5)
-            await msg.delete()
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
-        except Exception as e:
-            await msg.edit_text(f"❌ Error: {str(e)}")
-        finally:
-            gc.collect()
-
     @app.on_message(filters.regex(r"^/get_(\d{2}_\d{2}_\d{4})") & filters.private)
     async def handle_get_command(client, message):
         date_key = message.text.strip().replace("/get_", "")
-        await process_date_request(message, date_key)
+        target_date = date_key.replace('_', '-')
+        
+        draws = fetch_last_10_draws()
+        target_url = next((d['url'] for d in draws if d['date'] == target_date), None)
+        if not target_url:
+            target_url = f"https://www.keralalotteries.net/search?q={target_date}"
+            
+        await execute_result_delivery(message, target_url)
 
     @app.on_callback_query(filters.regex(r"^get_(\d{2}_\d{2}_\d{4})"))
     async def handle_get_callback(client, callback_query):
         await callback_query.answer()
         date_key = callback_query.data.replace("get_", "")
-        await process_date_request(callback_query, date_key)
+        target_date = date_key.replace('_', '-')
+        
+        draws = fetch_last_10_draws()
+        target_url = next((d['url'] for d in draws if d['date'] == target_date), None)
+        if not target_url:
+            target_url = f"https://www.keralalotteries.net/search?q={target_date}"
+            
+        await execute_result_delivery(callback_query, target_url)
 
     await app.start()
     try:
         await asyncio.Event().wait()
     finally:
         await app.stop()
-
 
 # --- 3. STREAMLIT THREADING & UI ---
 @st.cache_resource
@@ -410,4 +369,4 @@ def start_bot_thread():
 start_bot_thread()
 
 st.title("Kerala Lottery Bot 🍀")
-st.write("Pyrofork bot active with digit-by-digit Malayalam TTS & Prize Money parser.")
+st.write("Pyrofork bot active with pure text message (1-9) and .txt document TTS generation (1-6).")
