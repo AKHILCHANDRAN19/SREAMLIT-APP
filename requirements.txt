@@ -4,3 +4,6 @@ beautifulsoup4
 curl-cffi
 requests
 tgcrypto
+opencv-python
+pillow
+numpy
