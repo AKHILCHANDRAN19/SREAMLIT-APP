@@ -3,14 +3,39 @@ import asyncio
 import threading
 import re
 import gc
-import io
+import os
+import math
+import random
+import time
+import numpy as np
+import cv2
+import subprocess
+import concurrent.futures
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
-# --- Python 3.14 Safe HTTP Engine Import ---
+# --- CONFIGURATION ---
+DOWNLOAD_DIR = "/tmp" if os.name == 'posix' else os.path.join(os.path.expanduser("~"), "Downloads")
+FINAL_OUTPUT_VIDEO = os.path.join(DOWNLOAD_DIR, "final_lottery_result.mp4")
+
+FPS = 30
+WIDTH, HEIGHT = 1920, 1080
+
+# Fallback to default if custom fonts aren't found on the cloud server
+def load_font(font_key, size):
+    try:
+        font_paths = {
+            "hero": "Anton-Regular.ttf", "black": "Montserrat-Black.ttf",
+            "extrabold": "Montserrat-ExtraBold.ttf", "bold": "Montserrat-Bold.ttf"
+        }
+        return ImageFont.truetype(os.path.join(DOWNLOAD_DIR, font_paths.get(font_key, "")), size)
+    except:
+        return ImageFont.load_default()
+
+# --- HTTP ENGINE ---
 try:
     from curl_cffi import requests as cffi_requests
     USE_CURL_CFFI = True
@@ -18,355 +43,318 @@ except ImportError:
     import requests as standard_requests
     USE_CURL_CFFI = False
 
-# --- ALPHABET TO MALAYALAM PHONETICS ---
-ALPHA_TO_ML = {
-    'A': 'എ', 'B': 'ബി', 'C': 'സി', 'D': 'ഡി', 'E': 'ഇ', 'F': 'എഫ്',
-    'G': 'ജി', 'H': 'എച്ച്', 'I': 'ഐ', 'J': 'ജെ', 'K': 'കെ', 'L': 'എൽ',
-    'M': 'എം', 'N': 'എൻ', 'O': 'ഓ', 'P': 'പി', 'Q': 'ക്യു', 'R': 'ആർ',
-    'S': 'എസ്', 'T': 'ടി', 'U': 'യു', 'V': 'വി', 'W': 'ഡബ്ല്യു', 'X': 'എക്സ്',
-    'Y': 'വൈ', 'Z': 'സെഡ്'
-}
-
-DIGITS_TO_ML = {
-    '0': 'പൂജ്യം', '1': 'ഒന്ന്', '2': 'രണ്ട്', '3': 'മൂന്ന്', '4': 'നാല്',
-    '5': 'അഞ്ച്', '6': 'ആറ്', '7': 'ഏഴ്', '8': 'എട്ട്', '9': 'ഒമ്പത്'
-}
-
-def to_tts_format(ticket_str: str) -> str:
-    """Converts ticket 'DF 319327 (VADAKARA)' to 'ഡി , എഫ് , മൂന്ന് , ഒന്ന് ... (VADAKARA)'."""
-    match_series = re.match(r'^([A-Z]{2})\s*(\d{6})(.*)$', ticket_str)
-    if match_series:
-        series = match_series.group(1)
-        number = match_series.group(2)
-        extra = match_series.group(3).strip()
-
-        s_parts = [ALPHA_TO_ML.get(c, c) for c in series]
-        n_parts = [DIGITS_TO_ML.get(d, d) for d in number]
-        
-        combined = " , ".join(s_parts + n_parts)
-        if extra:
-            combined += f" {extra}"
-        return combined
-    else:
-        # It's a 4-digit number
-        n_parts = [DIGITS_TO_ML.get(d, d) for d in ticket_str]
-        return " , ".join(n_parts)
-
-
-# --- HTTP HELPER ---
 def http_get(url: str):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     if USE_CURL_CFFI:
         return cffi_requests.get(url, impersonate="chrome")
     return standard_requests.get(url, headers=headers)
 
-
-# --- 1. SCRAPING & PARSING LOGIC ---
-def fetch_last_10_draws():
-    """Scrapes main page table and returns top 10 lottery draws."""
+# ==========================================
+# 1. SCRAPING LOGIC
+# ==========================================
+def fetch_today_lottery():
     base_url = "https://www.keralalotteries.net/?m=1"
-    draws = []
     try:
         res = http_get(base_url)
         soup = BeautifulSoup(res.text, 'html.parser')
-        rows = soup.find_all('tr')
-        for row in rows:
-            tds = row.find_all('td')
-            if len(tds) >= 2:
-                a_tag = row.find('a', href=True)
-                row_text = row.get_text()
-                date_match = re.search(r'\d{2}-\d{2}-\d{4}', row_text)
-                
-                if date_match and a_tag:
-                    d_str = date_match.group(0)
-                    url = a_tag['href']
-                    title = tds[1].get_text(strip=True).replace('\n', ' ')
-                    title = re.sub(r'\s*Official Result$', '', title, flags=re.IGNORECASE)
-                    if not any(d['date'] == d_str for d in draws):
-                        draws.append({'date': d_str, 'title': title, 'url': url})
-                        
-            if len(draws) >= 10:
-                break
-        return draws
-    except Exception:
-        return []
-    finally:
-        gc.collect()
+        
+        target_link, lottery_title = None, None
+        for row in soup.find_all('tr'):
+            links = row.find_all('a', href=True)
+            for a in links:
+                if re.search(r'/\d{4}/\d{2}/.*kerala-lottery-result.*\.html', a['href']):
+                    target_link = a['href']
+                    lottery_title = a.get_text(strip=True).replace(" Official Result", "")
+                    break
+            if target_link: break
+            
+        if not target_link: return None, "Link not found."
 
-
-def parse_lottery_result_page(target_url: str):
-    """Scrapes individual result page and returns (Text Message String, TTS Txt File String)."""
-    try:
-        res = http_get(target_url)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        post_body = soup.find('div', id=re.compile(r'post-body-'))
-        if not post_body:
-            return "❌ Could not parse lottery result page body.", None
-
-        full_text = post_body.get_text(separator='\n', strip=True)
-        lines = [line.strip() for line in full_text.split('\n') if line.strip()]
-
-        # Extract Header Details
-        h1_tag = soup.find('h1', class_='entry-title')
-        raw_title = h1_tag.get_text(strip=True) if h1_tag else "Kerala Lottery Result"
-        clean_title = re.sub(r'Kerala Lottery Results:|\bOfficial\b|\bResult\b|\bToday\b', '', raw_title, flags=re.IGNORECASE).strip()
-
-        date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', full_text)
-        draw_date = date_match.group(1).replace('/', '-') if date_match else "N/A"
-
-        series_match = re.search(r'Today Lottery Series:\s*([A-Z0-9,\s]+)', full_text)
-        series_str = series_match.group(1).strip() if series_match else "N/A"
-
-        prize_headers = [
-            "1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize",
-            "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"
-        ]
-
-        # Strictest cutoff: The moment any of these hit, we stop parsing lines entirely.
-        hard_stop_phrases = [
-            "prize winners are advised to verify", "government gazette",
-            "tomorrow draw details", "previous results", "share this",
-            "result (today) date:"
-        ]
-
-        prizes_data = {}
-        prize_headings = {}
-        current_prize_key = None
+        page_res = http_get(target_link)
+        page_soup = BeautifulSoup(page_res.text, 'html.parser')
+        post_body = page_soup.find('div', id=re.compile(r'post-body-'))
+        
+        lines = [line.strip() for line in post_body.get_text(separator='\n', strip=True).split('\n') if line.strip()]
+        
+        prizes = {}
+        current_prize = None
+        headers = ["1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", 
+                   "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]
 
         for line in lines:
-            line_lower = line.lower()
-
-            # HARD STOP to eliminate noise (Social links, footer text, etc.)
-            if any(sp in line_lower for sp in hard_stop_phrases):
-                break
-
-            matched_header = None
-            for ph in prize_headers:
-                if ph.lower() in line_lower:
-                    matched_header = ph
-                    break
-
-            if matched_header:
-                current_prize_key = matched_header
-                if current_prize_key not in prizes_data:
-                    prizes_data[current_prize_key] = []
-                    heading_clean = re.sub(r'\s+', ' ', line).strip()
-                    # Format as: "1st Prize - Rs.1,00,00,000/-"
-                    heading_clean = re.sub(r'(' + re.escape(matched_header) + r')\s*(Rs\.)', r'\1 - \2', heading_clean, flags=re.IGNORECASE)
-                    prize_headings[current_prize_key] = heading_clean
+            if "verify the winning numbers" in line.lower(): break
+            
+            matched = next((h for h in headers if h.lower() in line.lower()), None)
+            if matched:
+                current_prize = matched
+                prizes[current_prize] = []
                 continue
 
-            # Strict capture of ticket numbers ONLY
-            if current_prize_key:
-                if (line.startswith("(") and line.endswith(")")) or line == "..." or line == "---":
-                    continue
-
-                if current_prize_key in ["1st Prize", "2nd Prize", "3rd Prize", "Consolation Prize"]:
+            if current_prize:
+                if line.startswith("(") or line == "..." or line == "---": continue
+                
+                if current_prize in ["1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize"]:
                     if re.search(r'^[A-Z]{2}\s*\d{6}', line):
-                        prizes_data[current_prize_key].append(line)
-
-                elif current_prize_key in ["4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]:
-                    # Prevent scraping random text. Extract 4 digits only.
-                    four_digits = re.findall(r'\b\d{4}\b', line)
-                    if four_digits:
-                        prizes_data[current_prize_key].extend(four_digits)
-
-        # --- 1. BUILD REGULAR TELEGRAM MESSAGE ---
-        msg_output = [
-            f"🎟️ **{clean_title}**",
-            f"📅 **Date:** `{draw_date}`",
-            f"🔢 **Series:** `{series_str}`",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        ]
-
-        prize_order = [
-            ("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"),
-            ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"),
-            ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣")
-        ]
-
-        for p_key, emoji in prize_order:
-            if p_key in prizes_data and prizes_data[p_key]:
-                heading_text = prize_headings.get(p_key, p_key)
-                vals = prizes_data[p_key]
-                if p_key in ["4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]:
-                    formatted_val = "  ".join(vals)
+                        prizes[current_prize].append(line)
                 else:
-                    formatted_val = "\n".join(vals)
-                msg_output.append(f"{emoji} **{heading_text}**\n`{formatted_val}`\n")
+                    digits = re.findall(r'\b\d{4}\b', line)
+                    if digits: prizes[current_prize].extend(digits)
 
-        final_msg_text = "\n".join(msg_output)
-
-        # --- 2. BUILD TTS .TXT FILE CONTENT (1st to 6th Prize) ---
-        tts_order = [
-            ("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"),
-            ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣")
-        ]
-
-        tts_output = []
-        for p_key, emoji in tts_order:
-            if p_key in prizes_data and prizes_data[p_key]:
-                heading_text = prize_headings.get(p_key, p_key)
-                tts_output.append(f"{emoji} {heading_text}")
-                
-                for item in prizes_data[p_key]:
-                    # Process and add comma-separated TTS format
-                    converted = to_tts_format(item)
-                    tts_output.append(converted)
-                tts_output.append("") # Empty line for spacing
-
-        final_tts_text = "\n".join(tts_output)
-
-        return final_msg_text, final_tts_text, draw_date
-
+        return prizes, lottery_title
     except Exception as e:
-        return f"❌ Error parsing results: {str(e)}", None, None
-    finally:
-        gc.collect()
+        return None, str(e)
 
+# ==========================================
+# 2. SHARED VIDEO ASSET GENERATORS
+# ==========================================
+def ease_out_expo(x): return 1 if x == 1 else 1 - math.pow(2, -10 * x)
+def ease_in_out_cubic(x): return 4 * x**3 if x < 0.5 else 1 - math.pow(-2 * x + 2, 3) / 2
 
-# --- 2. ASYNC PYROFORK BOT ---
-async def run_pyrofork_bot():
-    app = Client(
-        "lottery_bot",
-        api_id=st.secrets["API_ID"],
-        api_hash=st.secrets["API_HASH"],
-        bot_token=st.secrets["BOT_TOKEN"]
-    )
+def generate_vertical_gradient(w, h, stops):
+    grad = np.zeros((h, w, 4), dtype=np.uint8)
+    for y in range(h):
+        t = y / float(h - 1 if h > 1 else 1)
+        for i in range(len(stops) - 1):
+            if stops[i][0] <= t <= stops[i+1][0]:
+                range_t = (t - stops[i][0]) / (stops[i+1][0] - stops[i][0])
+                c = np.array(stops[i][1]) + (np.array(stops[i+1][1]) - np.array(stops[i][1])) * range_t
+                grad[y, :] = [int(c[0]), int(c[1]), int(c[2]), 255]
+                break
+    return Image.fromarray(grad, mode="RGBA")
 
-    @app.on_message(filters.command("start") & filters.private)
-    async def handle_start(client, message):
-        welcome_msg = (
-            "👋 **Welcome to Kerala Lottery Results Bot!**\n\n"
-            "**Available Commands:**\n"
-            "• `/generate` - Fetch today's live results\n"
-            "• `/gencustom` - Select from the last 10 draw dates\n"
-            "• `/start` - Show this menu"
-        )
-        await message.reply_text(welcome_msg)
+def pre_render_background():
+    y_coords, x_coords = np.ogrid[:HEIGHT, :WIDTH]
+    cx, cy = WIDTH / 2, HEIGHT / 2
+    norm_dist = np.clip(np.hypot(x_coords - cx, y_coords - cy) / math.hypot(cx, cy), 0, 1)
+    
+    r = (30 + (5 - 30) * (norm_dist ** 1.8)).astype(np.uint8)
+    g = (10 + (0 - 10) * (norm_dist ** 1.8)).astype(np.uint8)
+    b = (35 + (15 - 35) * (norm_dist ** 1.8)).astype(np.uint8)
+    a = np.full((HEIGHT, WIDTH), 255, dtype=np.uint8)
+    canvas = Image.fromarray(np.dstack((r, g, b, a)), mode="RGBA")
+    
+    bl = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    ImageDraw.Draw(bl).ellipse([int(cx - 700), int(cy - 200), int(cx + 700), int(cy + 450)], fill=(120, 50, 150, 60))
+    canvas.alpha_composite(bl.filter(ImageFilter.GaussianBlur(150)))
+    return canvas
 
-    async def execute_result_delivery(message_or_query, target_url: str):
-        """Helper to send the message chunks AND the TTS file"""
-        is_query = hasattr(message_or_query, 'edit_message_text')
+def pre_render_ribbon(title_text):
+    layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+    draw = ImageDraw.Draw(layer)
+    cx, cy, w, h = WIDTH//2, 280, 1040, 120
+    x1, y1, x2, y2 = cx - w//2, cy - h//2, cx + w//2, cy + h//2
+    
+    mask_c = Image.new("L", (WIDTH, HEIGHT), 0)
+    ImageDraw.Draw(mask_c).rectangle([x1, y1, x2, y2], fill=255)
+    
+    stops = [(0.0, (255, 245, 180)), (0.15, (255, 215, 0)), (0.85, (230, 150, 0)), (1.0, (180, 100, 0))]
+    grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+    grad_layer.paste(generate_vertical_gradient(WIDTH, h, stops), (0, y1))
+    layer.paste(grad_layer, (0,0), mask_c)
+    draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=3)
+    
+    font = load_font("extrabold", 44)
+    draw.text((cx, cy-2), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
+    draw.text((cx, cy-5), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
+    
+    shadow_data = np.array(layer.copy().filter(ImageFilter.GaussianBlur(15)))
+    shadow_data[..., :3] = 0
+    final = Image.fromarray(shadow_data)
+    final.alpha_composite(layer)
+    return final
+
+# ==========================================
+# 3. VIDEO RENDERERS
+# ==========================================
+def render_bang_video(prize_name, item, lottery_title, out_path):
+    """Engine 1: Explosive Bang Animation (For 1st, 2nd, 3rd)"""
+    duration = 6
+    bg = pre_render_background()
+    ribbon = pre_render_ribbon(f"{prize_name}")
+    
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(out_path, fourcc, FPS, (WIDTH, HEIGHT))
+    
+    for frame in range(FPS * duration):
+        time_sec = frame / FPS
+        canvas = bg.copy()
+        draw = ImageDraw.Draw(canvas)
         
-        if is_query:
-            msg = await message_or_query.edit_message_text("🔎 **Fetching and Formatting Results...**")
-            chat_id = message_or_query.message.chat.id
-        else:
-            msg = await message_or_query.reply_text("🔎 **Fetching and Formatting Results...**")
-            chat_id = message_or_query.chat.id
+        # Header
+        if time_sec > 0.0:
+            op = ease_out_expo(min(time_sec / 0.3, 1.0))
+            if op > 0.05:
+                draw.text((WIDTH//2, int(90 - (30 * (1 - op)))), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, int(255*op)), anchor="mm")
+        
+        # Ribbon
+        if time_sec > 0.2:
+            scale = min(max((time_sec - 0.2) / 0.4, 0.0), 1.0)
+            if scale > 0.01:
+                w = max(int(WIDTH * scale), 1)
+                temp = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+                temp.paste(ribbon.resize((w, HEIGHT), Image.Resampling.LANCZOS), (int((WIDTH - w) // 2), 0))
+                canvas.alpha_composite(temp)
 
-        result_text, tts_text, draw_date = parse_lottery_result_page(target_url)
+        # Main Ticket Text
+        if time_sec > 0.8:
+            hp = min(max((time_sec - 0.8) / 0.2, 0.0), 1.0) 
+            scale = 5.0 - (ease_out_expo(hp) * 4.0)
+            draw.text((WIDTH//2, HEIGHT//2), item, font=load_font("hero", int(150*scale)), fill=(255,215,0, int(255*hp)), anchor="mm")
 
-        if not tts_text: # Means an error occurred
-            await msg.edit_text(result_text)
-            return
+        bgr_frame = cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR)
+        out.write(bgr_frame)
+    out.release()
+    gc.collect()
 
-        # 1. Send the Main Text Result (Chunked)
-        chunks = [result_text[i:i+4000] for i in range(0, len(result_text), 4000)]
-        try:
-            for chunk in chunks:
-                await app.send_message(chat_id, chunk)
-                await asyncio.sleep(1.5)
-            await msg.delete()
+def render_scroll_video(prize_name, numbers_list, lottery_title, out_path, is_long=False):
+    """Engine 2 & 3: Smooth PDF-Style Scrolling (For 4th - 9th)"""
+    duration = 90 if is_long else 16
+    bg = pre_render_background()
+    ribbon = pre_render_ribbon(f"{prize_name}")
+    
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(out_path, fourcc, FPS, (WIDTH, HEIGHT))
+    
+    cols = 4 if is_long else 2
+    max_scroll = (len(numbers_list) // cols) * 150
+    
+    for frame in range(FPS * duration):
+        time_sec = frame / FPS
+        canvas = bg.copy()
+        draw = ImageDraw.Draw(canvas)
+        
+        if time_sec > 0.0:
+            op = ease_out_expo(min(time_sec / 0.5, 1.0))
+            draw.text((WIDTH//2, int(60 - (30 * (1 - op)))), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, int(255*op)), anchor="mm")
+
+        scroll_y = 0
+        if 2.0 < time_sec < (duration - 2.0):
+            prog = (time_sec - 2.0) / (duration - 4.0)
+            scroll_y = -int(max_scroll * ease_in_out_cubic(prog))
+        elif time_sec >= (duration - 2.0):
+            scroll_y = -max_scroll
+
+        for i, num in enumerate(numbers_list):
+            row = i // cols
+            col = i % cols
+            cx = (WIDTH // (cols+1)) * (col + 1)
+            cy = 440 + (row * 150) + scroll_y
             
-            # 2. Send the TTS .txt file
-            if tts_text.strip():
-                tts_bytes = tts_text.encode('utf-8')
-                tts_file = io.BytesIO(tts_bytes)
-                tts_file.name = f"TTS_{draw_date}.txt"
-                
-                await app.send_document(
-                    chat_id=chat_id,
-                    document=tts_file,
-                    caption=f"🗣️ **Malayalam Pronunciation (for TTS)**\n📅 `{draw_date}`"
-                )
+            if 350 < cy < HEIGHT + 100:
+                draw.text((cx, cy), num, font=load_font("hero", 60), fill="white", anchor="mm")
 
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
-        except Exception as e:
-            await app.send_message(chat_id, f"❌ Error sending data: {str(e)}")
-        finally:
-            gc.collect()
+        canvas.alpha_composite(ribbon)
+        out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
+        
+    out.release()
+    gc.collect()
+
+# ==========================================
+# 4. FFMPEG COMPRESSION & CONCATENATION
+# ==========================================
+def compress_and_combine(video_files, final_output):
+    """Lossless FFmpeg compression using libx264."""
+    list_path = os.path.join(DOWNLOAD_DIR, "concat_list.txt")
+    with open(list_path, "w") as f:
+        for vid in video_files:
+            f.write(f"file '{vid}'\n")
+            
+    cmd = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "26", 
+        "-pix_fmt", "yuv420p", final_output
+    ]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    os.remove(list_path)
+    for vid in video_files: 
+        if os.path.exists(vid):
+            os.remove(vid)
+
+# ==========================================
+# 5. ASYNC PYROFORK BOT
+# ==========================================
+async def run_pyrofork_bot():
+    app = Client("lottery_bot", api_id=st.secrets["API_ID"], api_hash=st.secrets["API_HASH"], bot_token=st.secrets["BOT_TOKEN"])
 
     @app.on_message(filters.command("generate") & filters.private)
     async def handle_generate(client, message):
-        draws = fetch_last_10_draws()
-        if not draws:
-            await message.reply_text("❌ Could not retrieve lottery list from main page.")
-            return
-        await execute_result_delivery(message, draws[0]['url'])
-
-    @app.on_message(filters.command("gencustom") & filters.private)
-    async def handle_gencustom(client, message):
-        msg = await message.reply_text("⏳ **Fetching last 10 draw dates...**")
-        draws = fetch_last_10_draws()
+        msg = await message.reply_text("⏳ **Scraping data and initiating Video Rendering Pipeline...**")
         
-        if not draws:
-            await msg.edit_text("❌ Failed to fetch draw history.")
-            return
+        prizes, lottery_title = fetch_today_lottery()
+        if not prizes:
+            return await msg.edit_text(f"❌ Scraping Failed: {lottery_title}")
 
-        text_lines = ["📅 **Select a date to view lottery results:**\n"]
-        keyboard_buttons = []
+        video_files = []
+        
+        # 1. First, Second, Third Prizes (Bang Animation)
+        for p in ["1st Prize", "2nd Prize", "3rd Prize"]:
+            if p in prizes and prizes[p]:
+                await msg.edit_text(f"🎬 **Rendering {p} video...**")
+                await asyncio.sleep(0.5) # Yield to update message on Telegram
+                out_path = os.path.join(DOWNLOAD_DIR, f"{p.replace(' ', '_')}.mp4")
+                
+                render_bang_video(p, prizes[p][0], lottery_title, out_path)
+                video_files.append(out_path)
+                
+                await msg.edit_text(f"🚀 **Uploading {p} video...**")
+                await message.reply_video(video=out_path, caption=f"🏆 **{p}**")
 
-        for item in draws:
-            d_str = item['date']
-            cmd_date = d_str.replace('-', '_')
-            title = item['title']
-            
-            text_lines.append(f"• **{d_str}** - {title}\n  👉 `/get_{cmd_date}`\n")
-            keyboard_buttons.append([
-                InlineKeyboardButton(f"📅 {d_str} | {title[:20]}...", callback_data=f"get_{cmd_date}")
-            ])
+        # 2. 4th, 5th, 6th (Slow Scroll)
+        for p in ["4th Prize", "5th Prize", "6th Prize"]:
+            if p in prizes and prizes[p]:
+                await msg.edit_text(f"🎬 **Rendering {p} video...**")
+                await asyncio.sleep(0.5)
+                out_path = os.path.join(DOWNLOAD_DIR, f"{p.replace(' ', '_')}.mp4")
+                
+                render_scroll_video(p, prizes[p], lottery_title, out_path, is_long=False)
+                video_files.append(out_path)
+                
+                await msg.edit_text(f"🚀 **Uploading {p} video...**")
+                await message.reply_video(video=out_path, caption=f"🏅 **{p}**")
 
-        reply_markup = InlineKeyboardMarkup(keyboard_buttons)
-        await message.reply_text("\n".join(text_lines), reply_markup=reply_markup)
+        # 3. 7th, 8th, 9th (Long Scroll)
+        for p in ["7th Prize", "8th Prize", "9th Prize"]:
+            if p in prizes and prizes[p]:
+                await msg.edit_text(f"🎬 **Rendering {p} video...**")
+                await asyncio.sleep(0.5)
+                out_path = os.path.join(DOWNLOAD_DIR, f"{p.replace(' ', '_')}.mp4")
+                
+                render_scroll_video(p, prizes[p], lottery_title, out_path, is_long=True)
+                video_files.append(out_path)
+                
+                await msg.edit_text(f"🚀 **Uploading {p} video...**")
+                await message.reply_video(video=out_path, caption=f"🏅 **{p}**")
+
+        await msg.edit_text("🗜️ **Compressing and combining all videos via FFmpeg...**")
+        await asyncio.sleep(0.5)
+        compress_and_combine(video_files, FINAL_OUTPUT_VIDEO)
+        
+        await msg.edit_text("🚀 **Uploading final combined HD video...**")
+        await message.reply_video(video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title}**\nCombined Prize Draw Render.")
+        
         await msg.delete()
-
-    @app.on_message(filters.regex(r"^/get_(\d{2}_\d{2}_\d{4})") & filters.private)
-    async def handle_get_command(client, message):
-        date_key = message.text.strip().replace("/get_", "")
-        target_date = date_key.replace('_', '-')
-        
-        draws = fetch_last_10_draws()
-        target_url = next((d['url'] for d in draws if d['date'] == target_date), None)
-        if not target_url:
-            target_url = f"https://www.keralalotteries.net/search?q={target_date}"
-            
-        await execute_result_delivery(message, target_url)
-
-    @app.on_callback_query(filters.regex(r"^get_(\d{2}_\d{2}_\d{4})"))
-    async def handle_get_callback(client, callback_query):
-        await callback_query.answer()
-        date_key = callback_query.data.replace("get_", "")
-        target_date = date_key.replace('_', '-')
-        
-        draws = fetch_last_10_draws()
-        target_url = next((d['url'] for d in draws if d['date'] == target_date), None)
-        if not target_url:
-            target_url = f"https://www.keralalotteries.net/search?q={target_date}"
-            
-        await execute_result_delivery(callback_query, target_url)
+        if os.path.exists(FINAL_OUTPUT_VIDEO): 
+            os.remove(FINAL_OUTPUT_VIDEO)
+        gc.collect()
 
     await app.start()
-    try:
-        await asyncio.Event().wait()
-    finally:
-        await app.stop()
+    try: await asyncio.Event().wait()
+    finally: await app.stop()
 
-# --- 3. STREAMLIT THREADING & UI ---
+# ==========================================
+# 6. STREAMLIT THREADING
+# ==========================================
 @st.cache_resource
 def start_bot_thread():
     def run_async_loop():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(run_pyrofork_bot())
-
-    bot_thread = threading.Thread(target=run_async_loop, daemon=True)
-    bot_thread.start()
-    return bot_thread
+    threading.Thread(target=run_async_loop, daemon=True).start()
 
 start_bot_thread()
 
-st.title("Kerala Lottery Bot 🍀")
-st.write("Pyrofork bot active with pure text message (1-9) and .txt document TTS generation (1-6).")
+st.title("Kerala Lottery Video Generator 🎬")
+st.write("Bot is running. Send `/generate` to build, upload, and compress the pipeline progressively.")
+
