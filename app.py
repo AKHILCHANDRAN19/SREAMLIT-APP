@@ -262,6 +262,33 @@ def generate_vertical_gradient(w, h, stops):
                 break
     return Image.fromarray(gradient, mode="RGBA")
 
+def pre_render_background(theme="blue"):
+    themes = {
+        "purple": (35, 5, 25, 30, 10, 35),
+        "blue": (10, 25, 50, 5, 10, 30),
+        "silver": (45, 45, 50, 20, 20, 25),
+        "gold": (50, 35, 10, 30, 20, 5)
+    }
+    if theme not in themes: theme = "blue"
+    r1, g1, b1, r2, g2, b2 = themes[theme]
+    
+    y_coords, x_coords = np.ogrid[:HEIGHT, :WIDTH]
+    cx, cy = WIDTH / 2, HEIGHT / 2
+    norm_dist = np.clip(np.hypot(x_coords - cx, y_coords - cy) / math.hypot(cx, cy), 0, 1)
+    
+    r = (r1 + (r2 - r1) * (norm_dist ** 1.8)).astype(np.uint8)
+    g = (g1 + (g2 - g1) * (norm_dist ** 1.8)).astype(np.uint8)
+    b = (b1 + (b2 - b1) * (norm_dist ** 1.8)).astype(np.uint8)
+    a = np.full((HEIGHT, WIDTH), 255, dtype=np.uint8)
+    
+    canvas = Image.fromarray(np.dstack((r, g, b, a)), mode="RGBA")
+    
+    bl = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    glow_color = (255, 80, 120, 80) if theme == "purple" else (80, 150, 255, 80) if theme == "blue" else (255, 215, 0, 60)
+    ImageDraw.Draw(bl).ellipse([int(cx - 700), int(cy - 200), int(cx + 700), int(cy + 450)], fill=glow_color)
+    canvas.alpha_composite(bl.filter(ImageFilter.GaussianBlur(150)))
+    return canvas
+
 def pre_render_glass_card(district_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
