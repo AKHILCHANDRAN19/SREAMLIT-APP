@@ -11,7 +11,6 @@ import time
 import numpy as np
 import cv2
 import subprocess
-import concurrent.futures
 from datetime import datetime
 from bs4 import BeautifulSoup
 from pyrogram import Client, filters
@@ -64,7 +63,7 @@ ALPHA_TO_ML = {
     'A': 'എ', 'B': 'ബി', 'C': 'സി', 'D': 'ഡി', 'E': 'ഇ', 'F': 'എഫ്',
     'G': 'ജി', 'H': 'എച്ച്', 'I': 'ഐ', 'J': 'ജെ', 'K': 'കെ', 'L': 'എൽ',
     'M': 'എം', 'N': 'എൻ', 'O': 'ഓ', 'P': 'പി', 'Q': 'ക്യു', 'R': 'ആർ',
-    'S': 'എസ്', 'T': 'ടി', 'U': 'യു', 'V': 'വി', 'W': 'ഡബ്ല്യു', 'X': 'എക്സ്',
+    'S': 'എസ്', 'T': 'ടി', 'U': 'യു', 'V': 'വി', 'W': 'ഡബ്ല്യു', 'X': 'എക്ক্স',
     'Y': 'വൈ', 'Z': 'സെഡ്'
 }
 
@@ -74,15 +73,13 @@ DIGITS_TO_ML = {
 }
 
 def to_tts_format(ticket_str: str) -> str:
-    """Converts ticket numbers to comma-separated Malayalam words for TTS."""
     match_series = re.match(r'^([A-Z]{2})\s*(\d{6})(.*)$', ticket_str)
     if match_series:
         series, number, extra = match_series.group(1), match_series.group(2), match_series.group(3).strip()
         s_parts = [ALPHA_TO_ML.get(c, c) for c in series]
         n_parts = [DIGITS_TO_ML.get(d, d) for d in number]
         combined = " , ".join(s_parts + n_parts)
-        if extra:
-            combined += f" {extra}"
+        if extra: combined += f" {extra}"
         return combined
     else:
         n_parts = [DIGITS_TO_ML.get(d, d) for d in ticket_str]
@@ -146,7 +143,6 @@ def parse_lottery_result_page(target_url: str):
 
         for line in lines:
             if any(sp in line.lower() for sp in ["prize winners are advised to verify", "government gazette", "tomorrow draw details"]): break
-
             matched_header = next((ph for ph in prize_headers if ph.lower() in line.lower()), None)
             if matched_header:
                 current_prize_key = matched_header
@@ -173,62 +169,22 @@ def parse_lottery_result_page(target_url: str):
                 formatted_val = "  ".join(prizes_data[p_key]) if "Prize" in p_key and "1st" not in p_key and "2nd" not in p_key and "3rd" not in p_key and "Consolation" not in p_key else "\n".join(prizes_data[p_key])
                 msg_output.append(f"{emoji} **{prize_headings.get(p_key, p_key)}**\n`{formatted_val}`\n")
 
-        tts_order = [
-            ("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"),
-            ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣")
-        ]
+        tts_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣")]
         tts_output = []
         for p_key, emoji in tts_order:
             if p_key in prizes_data and prizes_data[p_key]:
                 tts_output.append(f"{emoji} {prize_headings.get(p_key, p_key)}")
-                for item in prizes_data[p_key]:
-                    tts_output.append(to_tts_format(item))
+                for item in prizes_data[p_key]: tts_output.append(to_tts_format(item))
                 tts_output.append("")
         
-        tts_txt = "\n".join(tts_output)
-
-        return "\n".join(msg_output), tts_txt, draw_date, prizes_data, prize_headings, clean_lottery_title
+        return "\n".join(msg_output), "\n".join(tts_output), draw_date, prizes_data, prize_headings, clean_lottery_title
 
     except Exception as e:
         print(f"[LOG] Parsing Error: {e}")
         return None, None, None, {}, {}, None
 
-
 # ==========================================
-# 2. RAM OPTIMIZED BACKGROUND GENERATOR
-# ==========================================
-def create_and_save_backgrounds():
-    print("[LOG] Pre-rendering background themes to disk to save RAM...")
-    themes = {
-        "purple": (35, 5, 25, 30, 10, 35),
-        "blue": (10, 25, 50, 5, 10, 30),
-        "silver": (45, 45, 50, 20, 20, 25),
-        "gold": (50, 35, 10, 30, 20, 5)
-    }
-    
-    y_coords, x_coords = np.ogrid[:HEIGHT, :WIDTH]
-    cx, cy = WIDTH / 2, HEIGHT / 2
-    norm_dist = np.clip(np.hypot(x_coords - cx, y_coords - cy) / math.hypot(cx, cy), 0, 1)
-
-    bg_paths = {}
-    for name, (r1, g1, b1, r2, g2, b2) in themes.items():
-        path = os.path.join(DOWNLOAD_DIR, f"bg_{name}.png")
-        if not os.path.exists(path):
-            r = (r1 + (r2 - r1) * (norm_dist ** 1.8)).astype(np.uint8)
-            g = (g1 + (g2 - g1) * (norm_dist ** 1.8)).astype(np.uint8)
-            b = (b1 + (b2 - b1) * (norm_dist ** 1.8)).astype(np.uint8)
-            canvas = Image.fromarray(np.dstack((r, g, b, np.full((HEIGHT, WIDTH), 255, dtype=np.uint8))), mode="RGBA")
-            
-            bl = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-            glow_color = (255, 80, 120, 80) if name == "purple" else (80, 150, 255, 80) if name == "blue" else (255, 215, 0, 60)
-            ImageDraw.Draw(bl).ellipse([int(cx - 700), int(cy - 200), int(cx + 700), int(cy + 450)], fill=glow_color)
-            canvas.alpha_composite(bl.filter(ImageFilter.GaussianBlur(150)))
-            canvas.save(path)
-        bg_paths[name] = path
-    return bg_paths
-
-# ==========================================
-# 3. VIDEO RENDER ENGINES (Worker Safe)
+# 2. OPTIMIZED VIDEO GENERATION ENGINES
 # ==========================================
 def ease_out_expo(x): return 1 if x == 1 else 1 - math.pow(2, -10 * x)
 def ease_in_out_cubic(x): return 4 * x**3 if x < 0.5 else 1 - math.pow(-2 * x + 2, 3) / 2
@@ -246,13 +202,49 @@ def generate_vertical_gradient(w, h, stops):
                 break
     return Image.fromarray(grad, mode="RGBA")
 
+def create_and_save_backgrounds():
+    print("[LOG] Pre-rendering static backgrounds...")
+    themes = {
+        "purple": (35, 5, 25, 30, 10, 35),
+        "blue": (10, 25, 50, 5, 10, 30),
+        "silver": (45, 45, 50, 20, 20, 25),
+        "gold": (50, 35, 10, 30, 20, 5)
+    }
+    y_coords, x_coords = np.ogrid[:HEIGHT, :WIDTH]
+    cx, cy = WIDTH / 2, HEIGHT / 2
+    norm_dist = np.clip(np.hypot(x_coords - cx, y_coords - cy) / math.hypot(cx, cy), 0, 1)
+
+    bg_paths = {}
+    for name, (r1, g1, b1, r2, g2, b2) in themes.items():
+        path = os.path.join(DOWNLOAD_DIR, f"bg_{name}.png")
+        if not os.path.exists(path):
+            r = (r1 + (r2 - r1) * (norm_dist ** 1.8)).astype(np.uint8)
+            g = (g1 + (g2 - g1) * (norm_dist ** 1.8)).astype(np.uint8)
+            b = (b1 + (b2 - b1) * (norm_dist ** 1.8)).astype(np.uint8)
+            canvas = Image.fromarray(np.dstack((r, g, b, np.full((HEIGHT, WIDTH), 255, dtype=np.uint8))), mode="RGBA")
+            bl = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+            glow_col = (255, 80, 120, 80) if name == "purple" else (80, 150, 255, 80) if name == "blue" else (255, 215, 0, 60)
+            ImageDraw.Draw(bl).ellipse([int(cx - 700), int(cy - 200), int(cx + 700), int(cy + 450)], fill=glow_col)
+            canvas.alpha_composite(bl.filter(ImageFilter.GaussianBlur(150)))
+            canvas.save(path)
+        bg_paths[name] = path
+    return bg_paths
+
+def init_ffmpeg_pipe(out_path):
+    cmd = [
+        'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
+        '-s', f'{WIDTH}x{HEIGHT}', '-pix_fmt', 'bgr24', '-r', str(FPS),
+        '-i', '-', '-c:v', 'libx264', '-preset', 'ultrafast',
+        '-crf', '26', '-pix_fmt', 'yuv420p', out_path
+    ]
+    return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, duration_sec):
-    print(f"[LOG] Rendering Poothiri Bang: {out_path}")
+    print(f"[LOG] Direct FFmpeg Streaming (Bang): {out_path}")
     bg_asset = Image.open(bg_path).convert("RGBA")
     total_frames = FPS * duration_sec
     
-    ticket_num = item
-    district = "KERALA"
+    ticket_num, district = item, "KERALA"
     dist_match = re.search(r'\((.*?)\)', item)
     if dist_match:
         district = dist_match.group(1).upper()
@@ -261,7 +253,6 @@ def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, dur
     ribbon_asset = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     r_draw = ImageDraw.Draw(ribbon_asset)
     cx, cy, w, h = WIDTH//2, 310, 1040, 130
-    ImageDraw.Draw(Image.new("L", (WIDTH, HEIGHT), 0)).rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=255)
     grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     grad_layer.paste(generate_vertical_gradient(WIDTH, h, [(0.0, (255, 245, 180)), (0.15, (255, 215, 0)), (0.85, (230, 150, 0)), (1.0, (180, 100, 0))]), (0, cy-h//2))
     ribbon_asset.paste(grad_layer, (0,0), Image.new("L", (WIDTH, HEIGHT), 0).rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=255) or None)
@@ -269,10 +260,8 @@ def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, dur
     r_draw.text((cx, cy-2), prize_heading, font=load_font("extrabold", 44), fill=(255, 224, 102, 255), anchor="mm") 
     r_draw.text((cx, cy-5), prize_heading, font=load_font("extrabold", 44), fill=(58, 5, 0, 255), anchor="mm")
 
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    raw_path = out_path.replace(".mp4", "_raw.mp4")
-    out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
-    
+    process = init_ffmpeg_pipe(out_path)
+
     for frame in range(total_frames):
         time_sec = frame / FPS
         canvas = bg_asset.copy()
@@ -297,25 +286,34 @@ def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, dur
             scale = 5.0 - (ease_out_expo(hp) * 4.0)
             draw.text((WIDTH//2, 570), ticket_num, font=load_font("hero", int(320*scale)), fill=(255, 255, 255, int(255*hp)), stroke_width=4, stroke_fill=(255, 215, 0, int(255*hp)), anchor="mm")
             
-        out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
+        bgr_frame = cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR)
+        process.stdin.write(bgr_frame.tobytes())
 
-    out.release()
-    
-    print(f"[LOG] Compressing {out_path} via FFmpeg...")
-    subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p", out_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    os.remove(raw_path)
+    process.stdin.close()
+    process.wait()
     return out_path
 
-
 def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out_path, duration_sec, is_4col):
-    print(f"[LOG] Rendering Scroll Video: {out_path}")
+    print(f"[LOG] Direct FFmpeg Streaming (Giant Canvas Scroll): {out_path}")
     bg_asset = Image.open(bg_path).convert("RGBA")
     total_frames = FPS * duration_sec
-    
     cols = 4 if is_4col else 2
+    
+    # --- 1. THE GIANT CANVAS TRICK (Draw once to save RAM and CPU) ---
     rows = math.ceil(len(numbers_list) / cols)
-    max_scroll = max(0, rows * (150 if is_4col else 200) - 400)
+    total_canvas_h = max(HEIGHT, 440 + (rows * (150 if is_4col else 200)) + 600)
+    giant_canvas = Image.new("RGBA", (WIDTH, total_canvas_h), (0,0,0,0))
+    g_draw = ImageDraw.Draw(giant_canvas)
+    
+    for i, num in enumerate(numbers_list):
+        col, row = i % cols, i // cols
+        c_x = [240, 720, 1200, 1680][col] if is_4col else (540 if col == 0 else 1380)
+        c_y = 440 + (row * (150 if is_4col else 200))
+        cw, ch = (385, 110) if is_4col else (760, 160)
+        g_draw.rounded_rectangle([c_x-cw//2, c_y-ch//2, c_x+cw//2, c_y+ch//2], radius=15, fill=(15, 5, 20, 240), outline=(255, 215, 0, 200), width=3)
+        g_draw.text((c_x, c_y), num, font=load_font("hero", 80 if is_4col else 95), fill=(255, 250, 240, 255), anchor="mm")
 
+    # Ribbon
     ribbon_asset = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     r_draw = ImageDraw.Draw(ribbon_asset)
     cx, cy, w, h = WIDTH//2, 280, 1040, 120
@@ -326,9 +324,8 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
     r_draw.text((cx, cy-2), prize_heading, font=load_font("extrabold", 44), fill=(255, 224, 102, 255), anchor="mm") 
     r_draw.text((cx, cy-5), prize_heading, font=load_font("extrabold", 44), fill=(58, 5, 0, 255), anchor="mm")
 
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    raw_path = out_path.replace(".mp4", "_raw.mp4")
-    out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
+    max_scroll = max(0, rows * (150 if is_4col else 200) - 400)
+    process = init_ffmpeg_pipe(out_path)
     glitters = []
 
     for frame in range(total_frames):
@@ -342,28 +339,22 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
                 draw.text((WIDTH//2, int(60 - (30 * (1 - op)))), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, int(255*op)), anchor="mm")
                 draw.text((WIDTH//2, int(135 - (30 * (1 - op)))), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, int(255*op)), anchor="mm")
 
+        # Scroll math
         scroll_y_offset = 0
         scroll_start, scroll_end = 2.0, max(2.5, duration_sec - 2.0)
         if scroll_start < time_sec < scroll_end:
             prog = (time_sec - scroll_start) / (scroll_end - scroll_start)
-            scroll_y_offset = -int(max_scroll * ease_in_out_cubic(prog))
+            scroll_y_offset = int(max_scroll * ease_in_out_cubic(prog))
         elif time_sec >= scroll_end:
-            scroll_y_offset = -max_scroll
+            scroll_y_offset = max_scroll
 
-        for i, num in enumerate(numbers_list):
-            col = i % cols
-            row = i // cols
-            c_x = [240, 720, 1200, 1680][col] if is_4col else (540 if col == 0 else 1380)
-            c_y = 440 + (row * (150 if is_4col else 200)) + scroll_y_offset
+        # Crop window from giant canvas (ZERO DRAW MATH IN LOOP)
+        visible_cards = giant_canvas.crop((0, scroll_y_offset, WIDTH, scroll_y_offset + HEIGHT))
+        canvas.alpha_composite(visible_cards)
 
-            if 350 < c_y < HEIGHT + 100:
-                cw, ch = (385, 110) if is_4col else (760, 160)
-                draw.rounded_rectangle([c_x-cw//2, c_y-ch//2, c_x+cw//2, c_y+ch//2], radius=15, fill=(15, 5, 20, 240), outline=(255, 215, 0, 200), width=3)
-                draw.text((c_x, c_y), num, font=load_font("hero", 80 if is_4col else 95), fill=(255, 250, 240, 255), anchor="mm")
-
+        # Draw Stars
         if random.random() < 0.5:
             glitters.append({'x': random.randint(300, 1620), 'y': random.randint(400, 1000), 'life': 1.0, 's': random.randint(8, 20)})
-
         for g in glitters:
             if g['life'] > 0:
                 g['life'] -= 0.05
@@ -375,32 +366,34 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
         if time_sec > 0.2:
             canvas.alpha_composite(ribbon_asset)
 
-        out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
+        bgr_frame = cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR)
+        process.stdin.write(bgr_frame.tobytes())
 
-    out.release()
-    
-    print(f"[LOG] Compressing {out_path} via FFmpeg...")
-    subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p", out_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    os.remove(raw_path)
+        if frame % 150 == 0: gc.collect() # Prevents memory leaks during long scrolls
+
+    process.stdin.close()
+    process.wait()
     return out_path
 
 
 # ==========================================
-# 4. BOT PIPELINE (Multiprocessing & Upload)
+# 4. BOT PIPELINE (Sequential with New Messages)
 # ==========================================
-async def execute_result_pipeline(app, chat_id, message, target_url):
+async def execute_result_pipeline(app, chat_id, target_url):
     print(f"[LOG] Executing Pipeline for URL: {target_url}")
-    msg = await message.reply_text("🔎 **Fetching lottery draw data...**")
+    await app.send_message(chat_id, "🔎 **Fetching lottery draw data...**")
     
     text_msg, tts_txt, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
     if not prizes:
-        return await msg.edit_text("❌ Scraping failed or no data found.")
+        return await app.send_message(chat_id, "❌ Scraping failed or no data found.")
 
+    # 1. Send Text
     chunks = [text_msg[i:i+4000] for i in range(0, len(text_msg), 4000)]
     for chunk in chunks:
         await app.send_message(chat_id, chunk)
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.5)
         
+    # 2. Send TTS Document
     if tts_txt and tts_txt.strip():
         print(f"[LOG] Sending TTS Text Document for {draw_date}...")
         tts_file = io.BytesIO(tts_txt.encode('utf-8'))
@@ -410,10 +403,14 @@ async def execute_result_pipeline(app, chat_id, message, target_url):
             document=tts_file,
             caption=f"🗣️ **Malayalam Pronunciation File for TTS**\n📅 `{draw_date}`"
         )
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.5)
 
-    bg_paths = create_and_save_backgrounds()
+    # 3. Render Backgrounds
+    bg_msg = await app.send_message(chat_id, "⚙️ **Pre-rendering graphical background themes...**")
+    bg_paths = await asyncio.to_thread(create_and_save_backgrounds)
+    await bg_msg.delete()
 
+    # 4. Sequentially Render & Upload Individual Videos
     tier_config = [
         ("1st Prize", "bang", 10, False, "purple"),
         ("2nd Prize", "bang", 10, False, "silver"),
@@ -431,37 +428,38 @@ async def execute_result_pipeline(app, chat_id, message, target_url):
     
     for p_name, engine, dur, is_4c, theme in tier_config:
         if p_name in prizes and prizes[p_name]:
-            await msg.edit_text(f"🎬 **Rendering & Compressing {p_name} ({dur}s)...**\n*(Theme: {theme.upper()})*")
+            status_msg = await app.send_message(chat_id, f"🎬 **Rendering {p_name} video ({dur}s)...**\n*(Theme: {theme.upper()})*")
             out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
             full_heading = prize_headings.get(p_name, p_name)
 
-            loop = asyncio.get_running_loop()
             if engine == "bang":
-                await loop.run_in_executor(None, render_bang_video, bg_paths[theme], full_heading, prizes[p_name][0], lottery_title, out_path, dur)
+                await asyncio.to_thread(render_bang_video, bg_paths[theme], full_heading, prizes[p_name][0], lottery_title, out_path, dur)
             else:
-                await loop.run_in_executor(None, render_scroll_video, bg_paths[theme], full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c)
+                await asyncio.to_thread(render_scroll_video, bg_paths[theme], full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c)
             
             video_files.append(out_path)
-            print(f"[LOG] Uploading {out_path} to Telegram...")
-            await msg.edit_text(f"🚀 **Uploading {p_name}...**")
+            await status_msg.edit_text(f"🚀 **Uploading {p_name}...**")
             await app.send_video(chat_id=chat_id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
+            await status_msg.delete()
 
-    await msg.edit_text("🗜️ **Combining all videos via FFmpeg...**")
+    # 5. Combine Final
+    status_msg = await app.send_message(chat_id, "🗜️ **Combining all videos into one final file...**")
     list_path = os.path.join(DOWNLOAD_DIR, "concat.txt")
     with open(list_path, "w") as f:
         for vid in video_files: f.write(f"file '{vid}'\n")
     
     subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path, "-c:v", "copy", FINAL_OUTPUT_VIDEO], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
-    await msg.edit_text("🚀 **Uploading final combined HD video...**")
+    await status_msg.edit_text("🚀 **Uploading final combined HD video...**")
     await app.send_video(chat_id=chat_id, video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Full Official Draw**\n📅 `{draw_date}`")
     
-    await msg.delete()
+    await status_msg.delete()
     for f in video_files + [FINAL_OUTPUT_VIDEO, list_path]: 
         if os.path.exists(f): os.remove(f)
+    print("[LOG] Process Complete.")
 
 # ==========================================
-# 5. ASYNC PYROFORK BOT (WITH FIXES)
+# 5. ASYNC PYROFORK BOT
 # ==========================================
 async def run_pyrofork_bot():
     try:
@@ -476,9 +474,9 @@ async def run_pyrofork_bot():
         @app.on_message(filters.command("start") & filters.private)
         async def handle_start(client, message):
             welcome = (
-                "👋 **Welcome to Kerala Lottery Results & Video Generator Bot!**\n\n"
+                "👋 **Welcome to Kerala Lottery Video Generator Bot!**\n\n"
                 "**Available Commands:**\n"
-                "• `/generate` - Fetch today's result, TTS file & render videos\n"
+                "• `/generate` - Fetch today's result & render pipeline\n"
                 "• `/gencustom` - Select from last 10 draw dates\n"
                 "• `/start` - Show this menu"
             )
@@ -488,11 +486,10 @@ async def run_pyrofork_bot():
         async def handle_generate(client, message):
             draws = fetch_last_10_draws()
             if not draws: return await message.reply_text("❌ Could not retrieve draw list.")
-            await execute_result_pipeline(app, message.chat.id, message, draws[0]['url'])
+            await execute_result_pipeline(app, message.chat.id, draws[0]['url'])
 
         @app.on_message(filters.command("gencustom") & filters.private)
         async def handle_gencustom(client, message):
-            msg = await message.reply_text("⏳ **Fetching draw dates...**")
             draws = fetch_last_10_draws()
             text_lines = ["📅 **Select a date:**\n"]
             buttons = []
@@ -500,7 +497,6 @@ async def run_pyrofork_bot():
                 d_str = item['date']
                 buttons.append([InlineKeyboardButton(f"📅 {d_str} | {item['title'][:20]}", callback_data=f"get_{d_str}")])
             await message.reply_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(buttons))
-            await msg.delete()
 
         @app.on_callback_query(filters.regex(r"^get_(\d{2}-\d{2}-\d{4})"))
         async def handle_get_callback(client, callback_query):
@@ -508,8 +504,7 @@ async def run_pyrofork_bot():
             target_date = callback_query.data.replace("get_", "")
             draws = fetch_last_10_draws()
             target_url = next((d['url'] for d in draws if d['date'] == target_date), f"https://www.keralalotteries.net/search?q={target_date}")
-            print(f"[LOG] /gencustom triggered for date: {target_date}")
-            await execute_result_pipeline(app, callback_query.message.chat.id, callback_query.message, target_url)
+            await execute_result_pipeline(app, callback_query.message.chat.id, target_url)
 
         await app.start()
         print("[LOG] Bot Started Successfully.")
@@ -537,4 +532,5 @@ def start_bot_thread():
 start_bot_thread()
 
 st.title("Kerala Lottery Video Engine 🎬")
-st.write("Bot is running. Uses Threading & FFmpeg compression to slash generation time & file size.")
+st.write("Bot is running. Uses Threading & Direct FFmpeg Piping for massive speed boosts.")
+
