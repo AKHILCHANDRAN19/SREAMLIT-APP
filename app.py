@@ -507,7 +507,14 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, durat
     
     confetti = []
     confetti_triggered = False
-    glass_bounds = [500, 780, 1420, 1000]
+    
+    # --- DYNAMIC STAR ANCHORS ---
+    temp_draw = ImageDraw.Draw(Image.new("RGBA", (1,1)))
+    bbox = temp_draw.textbbox((0, 0), district, font=load_font("black", 85))
+    box_w = max(920, (bbox[2] - bbox[0]) + 160)
+    x1, x2 = (WIDTH // 2) - (box_w // 2), (WIDTH // 2) + (box_w // 2)
+    glass_bounds = [x1, 780, x2, 1000]
+    # ----------------------------
     
     box_glitters = [
         {'x': glass_bounds[0], 'y': glass_bounds[1], 'phase': random.uniform(0, 6), 'speed': 0.15},
