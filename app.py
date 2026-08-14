@@ -17,6 +17,7 @@ from bs4 import BeautifulSoup
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
+import intro
 
 #
 # ==========================================
@@ -889,10 +890,12 @@ async def run_pyrofork_bot():
         @app.on_callback_query(filters.regex(r"^vy_(.*)"))
         async def handle_video_yes(client, callback_query):
             draw_date = callback_query.matches[0].group(1)
+            
             tier_names = [
-                "1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "4th Prize", 
+                "Intro", "1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "4th Prize", 
                 "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"
             ]
+
             
             buttons = []
             for i, name in enumerate(tier_names):
@@ -919,6 +922,7 @@ async def run_pyrofork_bot():
                 return await callback_query.message.edit_text("❌ Scraping failed or no data found.")
                 
             tier_config = [
+                ("Intro", "intro", 0, False, "none", 0, 0),
                 ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0, 0),
                 ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_START_DELAY, CONSOLATION_END_DELAY),
                 ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0, 0),
@@ -930,6 +934,7 @@ async def run_pyrofork_bot():
                 ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
                 ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY)
             ]
+
             
             video_files = []
             tiers_to_render = [tier_config[tier_idx]] if action == "rs" else tier_config[:tier_idx + 1]
