@@ -942,20 +942,30 @@ async def run_pyrofork_bot():
             await callback_query.message.delete()
             
             for p_name, engine, dur, is_4c, theme, start_delay, end_delay in tiers_to_render:
-                if p_name in prizes and prizes[p_name]:
-                    status_msg = await client.send_message(callback_query.message.chat.id, f"🎬 **Rendering {p_name} video ({dur}s)...**\n*(Theme: {theme.upper()})*")
-                    out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
+            # 1. Check if it's the Intro OR if the prize data exists
+                if engine == "intro" or (p_name in prizes and prizes[p_name]):
+                status_msg = await client.send_message(callback_query.message.chat.id, f"🎬 **Rendering {p_name}...**")
+                out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
+                
+                # 2. Route to the correct rendering engine
+                if engine == "intro":
+                    intro.generate_video(out_path)
+                else:
                     full_heading = prize_headings.get(p_name, p_name)
-
                     if engine == "bang":
                         render_bang_video(theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur)
                     else:
                         render_scroll_video(theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, start_delay, end_delay)
-                    
-                    video_files.append(out_path)
+                
+                video_files.append(out_path)
+                
+                # 3. Only upload the individual clip if the user clicked "Only" (action == "rs")
+                if action == "rs":
                     await status_msg.edit_text(f"🚀 **Uploading {p_name}...**")
                     await client.send_video(chat_id=callback_query.message.chat.id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
-                    await status_msg.delete()
+                
+                await status_msg.delete()
+
 
             if action == "ru" and len(video_files) > 0:
                 status_msg = await client.send_message(callback_query.message.chat.id, "🗜️ **Combining selected videos into one final file...**")
