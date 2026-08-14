@@ -262,32 +262,35 @@ def generate_vertical_gradient(w, h, stops):
                 break
     return Image.fromarray(gradient, mode="RGBA")
 
-def pre_render_background(theme="blue"):
-    themes = {
-        "purple": (35, 5, 25, 30, 10, 35),
-        "blue": (10, 25, 50, 5, 10, 30),
-        "silver": (45, 45, 50, 20, 20, 25),
-        "gold": (50, 35, 10, 30, 20, 5)
-    }
-    if theme not in themes: theme = "blue"
-    r1, g1, b1, r2, g2, b2 = themes[theme]
+def pre_render_glass_card(district_text):
+    layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+    draw = ImageDraw.Draw(layer)
     
-    y_coords, x_coords = np.ogrid[:HEIGHT, :WIDTH]
-    cx, cy = WIDTH / 2, HEIGHT / 2
-    norm_dist = np.clip(np.hypot(x_coords - cx, y_coords - cy) / math.hypot(cx, cy), 0, 1)
+    f_sub = load_font("bold", 48) 
+    f_main = load_font("black", 85) 
     
-    r = (r1 + (r2 - r1) * (norm_dist ** 1.8)).astype(np.uint8)
-    g = (g1 + (g2 - g1) * (norm_dist ** 1.8)).astype(np.uint8)
-    b = (b1 + (b2 - b1) * (norm_dist ** 1.8)).astype(np.uint8)
-    a = np.full((HEIGHT, WIDTH), 255, dtype=np.uint8)
+    # --- DYNAMIC BOX WIDTH CALCULATION ---
+    bbox = draw.textbbox((0, 0), district_text, font=f_main)
+    text_w = bbox[2] - bbox[0]
+    box_w = max(920, text_w + 160) # 920 is default minimum width, 160 is padding
+    x1 = (WIDTH // 2) - (box_w // 2)
+    x2 = (WIDTH // 2) + (box_w // 2)
+    bounds = [x1, 780, x2, 1000]
+    # -------------------------------------
     
-    canvas = Image.fromarray(np.dstack((r, g, b, a)), mode="RGBA")
+    draw.rounded_rectangle(bounds, radius=30, fill=(20, 10, 35, 230), outline=(255, 215, 0, 190), width=4)
+    draw.rounded_rectangle([bounds[0]+2, bounds[1]+2, bounds[2]-2, bounds[3]-2], radius=28, outline=(255, 255, 255, 100), width=2)
     
-    bl = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    glow_color = (255, 80, 120, 80) if theme == "purple" else (80, 150, 255, 80) if theme == "blue" else (255, 215, 0, 60)
-    ImageDraw.Draw(bl).ellipse([int(cx - 700), int(cy - 200), int(cx + 700), int(cy + 450)], fill=glow_color)
-    canvas.alpha_composite(bl.filter(ImageFilter.GaussianBlur(150)))
-    return canvas
+    draw.text((WIDTH//2, 835), "WINNING DISTRICT", font=f_sub, fill="#B8C0D0", anchor="mm")
+    main_y = 925
+    
+    glow = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+    ImageDraw.Draw(glow).text((WIDTH//2, main_y), district_text, font=f_main, fill=(255, 215, 0, 120), anchor="mm")
+    layer.alpha_composite(glow.filter(ImageFilter.GaussianBlur(15)))
+    
+    draw.text((WIDTH//2, main_y + 5), district_text, font=f_main, fill=(0,0,0,230), anchor="mm")
+    draw.text((WIDTH//2, main_y), district_text, font=f_main, fill="#FFFFFF", anchor="mm")
+    return layer
 
 def pre_render_ribbon_bang(title_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
