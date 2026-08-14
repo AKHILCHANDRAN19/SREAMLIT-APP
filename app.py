@@ -33,30 +33,28 @@ DURATION_6TH_PRIZE = 25
 DURATION_7TH_PRIZE = 90
 DURATION_8TH_PRIZE = 90
 DURATION_9TH_PRIZE = 90
+DURATION_10TH_PRIZE = 90
 
 # 2. SCROLL SPEED SETTINGS (START AND END DELAYS)
-# Adjusting these changes how long the scroll waits before starting/ending.
 # Lowering total duration + keeping delays the same = FASTER scrolling.
 
-# Consolation Prize Delays
 CONSOLATION_START_DELAY = 2.0
 CONSOLATION_END_DELAY = 2.0
 
-# 4th Prize Delays
 PRIZE_4TH_START_DELAY = 2.0
 PRIZE_4TH_END_DELAY = 2.0
 
-# 5th Prize Delays
 PRIZE_5TH_START_DELAY = 2.0
 PRIZE_5TH_END_DELAY = 2.0
 
-# 6th Prize Delays
 PRIZE_6TH_START_DELAY = 2.0
 PRIZE_6TH_END_DELAY = 2.0
 
-# 7th to 9th Prize Delays
 PRIZE_7_8_9_START_DELAY = 2.0
 PRIZE_7_8_9_END_DELAY = 2.0
+
+PRIZE_10TH_START_DELAY = 2.0
+PRIZE_10TH_END_DELAY = 2.0
 
 # ==========================================
 
@@ -153,8 +151,8 @@ def fetch_last_10_draws():
         print(f"**[LOG]** Error fetching draws: {e}", flush=True)
         return []
 
-def clean_prize_heading(raw_str, default_key):
-    """Dynamic Regex engine to correctly fetch ANY prize money amount from 1st to 9th."""
+def clean_prize_heading(raw_str):
+    """Dynamic Regex engine to correctly fetch ANY prize money amount from 1st to 10th."""
     s = raw_str.replace('\xa0', ' ').strip().upper()
     s = re.sub(r'(?i)RS\.?\s*:?\s*', '₹', s)
     s = s.replace('/-', '').replace('—', ' - ').replace('-', ' - ')
@@ -185,10 +183,12 @@ def parse_lottery_result_page(target_url: str):
         else:
             clean_lottery_title = re.sub(r'Kerala Lottery Results:|\bOfficial\b|\bResult\b|\bToday\b|\d{2}-\d{2}-\d{4}', '', raw_title, flags=re.IGNORECASE).strip().upper()
 
-        for tag in post_body.find_all(['p', 'div', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li']):
-            tag.insert_before('\n')
+        # Flawless Newline Preservation
+        for tag in post_body.find_all(['br', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li', 'table']):
+            tag.insert_after('\n')
         
-        full_text = post_body.get_text(separator=' ', strip=True)
+        # We do NOT use strip=True here, because it removes the \n we just injected.
+        full_text = post_body.get_text(separator=' ')
         lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
 
         date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', full_text)
@@ -197,19 +197,20 @@ def parse_lottery_result_page(target_url: str):
         series_match = re.search(r'Today Lottery Series:\s*([A-Z0-9,\s]+)', full_text)
         series_str = series_match.group(1).strip() if series_match else "N/A"
 
-        prize_headers = ["1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]
+        prize_headers = ["1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize", "10th Prize"]
         prizes_data = {}
         prize_headings = {}
         current_prize_key = None
 
         for line in lines:
             if any(sp in line.lower() for sp in ["prize winners are advised to verify", "government gazette", "tomorrow draw details"]): break
+            
             matched_header = next((ph for ph in prize_headers if ph.lower() in line.lower()), None)
             if matched_header:
                 current_prize_key = matched_header
                 if current_prize_key not in prizes_data:
                     prizes_data[current_prize_key] = []
-                    prize_headings[current_prize_key] = clean_prize_heading(line, matched_header)
+                    prize_headings[current_prize_key] = clean_prize_heading(line)
                 continue
 
             if current_prize_key:
@@ -221,7 +222,7 @@ def parse_lottery_result_page(target_url: str):
                     if four_digits: prizes_data[current_prize_key].extend(four_digits)
 
         msg_output = [f"🎟️ **{clean_lottery_title}**", f"📅 **Date:** `{draw_date}`", f"🔢 **Series:** `{series_str}`", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"]
-        prize_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣")]
+        prize_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣"), ("10th Prize", "🔟")]
 
         for p_key, emoji in prize_order:
             if p_key in prizes_data and prizes_data[p_key]:
@@ -256,7 +257,8 @@ def generate_vertical_gradient(w, h, stops):
         for i in range(len(stops) - 1):
             if stops[i][0] <= t <= stops[i+1][0]:
                 range_t = (t - stops[i][0]) / (stops[i+1][0] - stops[i][0])
-                c = np.array(stops[i][1]) + (np.array(stops[i+1][1]) - np.array(stops[i][1])) * range_t
+                c1, c2 = np.array(stops[i][1]), np.array(stops[i+1][1])
+                c = c1 + (c2 - c1) * range_t
                 gradient[y, :] = [int(c[0]), int(c[1]), int(c[2]), 255]
                 break
     return Image.fromarray(gradient, mode="RGBA")
@@ -291,8 +293,10 @@ def pre_render_background(theme="blue"):
 def pre_render_ribbon_bang(title_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
-    cx, cy, w, h = WIDTH//2, 310, 1040, 130
-    x1, y1, x2, y2 = cx - w//2, cy - h//2, cx + w//2, cy + h//2
+    cx, cy = WIDTH//2, 310
+    w, h = 1040, 130
+    x1, y1 = cx - w//2, cy - h//2
+    x2, y2 = cx + w//2, cy + h//2
     
     mask_c = Image.new("L", (WIDTH, HEIGHT), 0)
     ImageDraw.Draw(mask_c).rectangle([x1, y1, x2, y2], fill=255)
@@ -320,7 +324,8 @@ def pre_render_ribbon_scroll(title_text):
     draw = ImageDraw.Draw(layer)
     cx, cy = WIDTH//2, 280
     w, h = 1040, 120
-    x1, y1, x2, y2 = cx - w//2, cy - h//2, cx + w//2, cy + h//2
+    x1, y1 = cx - w//2, cy - h//2
+    x2, y2 = cx + w//2, cy + h//2
     
     mask_c = Image.new("L", (WIDTH, HEIGHT), 0)
     ImageDraw.Draw(mask_c).rectangle([x1, y1, x2, y2], fill=255)
@@ -403,7 +408,7 @@ def pre_render_grid_card(text, is_small=False):
     return layer
 
 # ==========================================
-# 3. GLOBAL WORKER VARIABLES (Using ThreadPool)
+# 3. GLOBAL WORKER VARIABLES
 # ==========================================
 MP_BG_ASSET = None
 MP_RIBBON_ASSET = None
@@ -754,7 +759,7 @@ async def execute_result_pipeline(app, chat_id, target_url):
     
     text_msg, tts_txt, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
     if not prizes:
-        return await msg.edit_text("❌ Scraping failed or no data found.")
+        return await msg.edit_text("❌ Scraping failed or no data found. The results may not be fully published yet.")
 
     # 1. Send Text Chunks
     await msg.delete()
@@ -786,7 +791,8 @@ async def execute_result_pipeline(app, chat_id, target_url):
         ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_START_DELAY, PRIZE_6TH_END_DELAY),
         ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
         ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
-        ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY)
+        ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
+        ("10th Prize", "scroll", DURATION_10TH_PRIZE, True, "blue", PRIZE_10TH_START_DELAY, PRIZE_10TH_END_DELAY)
     ]
 
     video_files = []
@@ -797,7 +803,7 @@ async def execute_result_pipeline(app, chat_id, target_url):
             out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
             full_heading = prize_headings.get(p_name, p_name)
 
-            # Strict synchronous call
+            # Strict synchronous call to avoid crashes
             if engine == "bang":
                 render_bang_video(theme, full_heading, prizes[p_name][0], lottery_title, out_path, duration_sec=dur)
             else:
@@ -809,15 +815,16 @@ async def execute_result_pipeline(app, chat_id, target_url):
             await status_msg.delete()
 
     # 4. Combine Final
-    status_msg = await app.send_message(chat_id, "🗜️ **Combining all videos into one final file...**")
-    compress_and_combine(video_files, FINAL_OUTPUT_VIDEO)
-    
-    await status_msg.edit_text("🚀 **Uploading final combined HD video...**")
-    await app.send_video(chat_id=chat_id, video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Full Official Draw**\n📅 `{draw_date}`")
-    
-    await status_msg.delete()
-    if os.path.exists(FINAL_OUTPUT_VIDEO): os.remove(FINAL_OUTPUT_VIDEO)
-    print("**[LOG]** Process Complete.", flush=True)
+    if video_files:
+        status_msg = await app.send_message(chat_id, "🗜️ **Combining all videos into one final file...**")
+        compress_and_combine(video_files, FINAL_OUTPUT_VIDEO)
+        
+        await status_msg.edit_text("🚀 **Uploading final combined HD video...**")
+        await app.send_video(chat_id=chat_id, video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Full Official Draw**\n📅 `{draw_date}`")
+        
+        await status_msg.delete()
+        if os.path.exists(FINAL_OUTPUT_VIDEO): os.remove(FINAL_OUTPUT_VIDEO)
+        print("**[LOG]** Process Complete.", flush=True)
 
 # ==========================================
 # 6. ASYNC PYROFORK BOT
@@ -894,3 +901,4 @@ start_bot_thread()
 
 st.title("Kerala Lottery Video Engine 🎬")
 st.write("Bot is running. Powered by strict synchronous CV2 writing and ThreadPool Executor.")
+
