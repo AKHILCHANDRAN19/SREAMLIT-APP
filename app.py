@@ -108,7 +108,8 @@ def fetch_last_10_draws():
                         draws.append({'date': d_str, 'title': title, 'url': a_tag['href']})
             if len(draws) >= 10: break
         return draws
-    except Exception:
+    except Exception as e:
+        print(f"**[LOG]** Error fetching draws: {e}")
         return []
 
 def parse_lottery_result_page(target_url: str):
@@ -181,7 +182,7 @@ def parse_lottery_result_page(target_url: str):
         return "\n".join(msg_output), "\n".join(tts_output), draw_date, prizes_data, prize_headings, clean_lottery_title
 
     except Exception as e:
-        print(f"[LOG] Parsing Error: {e}")
+        print(f"**[LOG]** Parsing Error: {e}", flush=True)
         return None, None, None, {}, {}, None
 
 # ==========================================
@@ -204,7 +205,7 @@ def generate_vertical_gradient(w, h, stops):
     return Image.fromarray(grad, mode="RGBA")
 
 def create_and_save_backgrounds():
-    print("[LOG] Pre-rendering static backgrounds...")
+    print("**[LOG]** Pre-rendering static backgrounds...", flush=True)
     themes = {
         "purple": (35, 5, 25, 30, 10, 35),
         "blue": (10, 25, 50, 5, 10, 30),
@@ -232,64 +233,86 @@ def create_and_save_backgrounds():
     return bg_paths
 
 # ==========================================
-# 3. MULTIPROCESSING GLOBALS & RENDERERS
+# 3. GLOBAL WORKER VARIABLES (For Multiprocessing)
 # ==========================================
-# These inherit natively to worker processes on Linux (Streamlit Cloud via fork)
 MP_BG_ASSET = None
 MP_RIBBON_ASSET = None
-MP_GIANT_CANVAS = None
-MP_MATH_CACHE = []
+MP_SCROLL_MASK = None
 MP_BEAM_TEMPLATE = None
+MP_BIG_CARDS_LAYER = None
+MP_MATH_CACHE = []
 MP_LOTTERY_TITLE = ""
 
-def init_mp_assets(bg_path, ribbon, giant_canvas, math_cache, title):
-    global MP_BG_ASSET, MP_RIBBON_ASSET, MP_GIANT_CANVAS, MP_MATH_CACHE, MP_BEAM_TEMPLATE, MP_LOTTERY_TITLE
+def init_worker_assets(bg_path, ribbon, scroll_mask, giant_canvas, math_cache, title):
+    """Sets globals in the worker threads safely before mapping to prevent RAM overhead."""
+    global MP_BG_ASSET, MP_RIBBON_ASSET, MP_SCROLL_MASK, MP_BEAM_TEMPLATE, MP_BIG_CARDS_LAYER, MP_MATH_CACHE, MP_LOTTERY_TITLE
     MP_BG_ASSET = Image.open(bg_path).convert("RGBA")
     MP_RIBBON_ASSET = ribbon
-    MP_GIANT_CANVAS = giant_canvas
+    MP_SCROLL_MASK = scroll_mask
+    MP_BIG_CARDS_LAYER = giant_canvas
     MP_MATH_CACHE = math_cache
     MP_LOTTERY_TITLE = title
     
-    # Pre-render light sweep template
+    # Pre-blur beam template once
     bt = Image.new("RGBA", (800, HEIGHT), (0,0,0,0))
     ImageDraw.Draw(bt).polygon([(500, 0), (700, 0), (200, HEIGHT), (0, HEIGHT)], fill=(255, 255, 255, 120))
     MP_BEAM_TEMPLATE = bt.filter(ImageFilter.GaussianBlur(15))
 
 def mp_render_single_frame(frame_index):
+    """Zero-math drawing engine executed by 3 separate CPU cores."""
     m = MP_MATH_CACHE[frame_index]
     canvas = MP_BG_ASSET.copy()
     draw = ImageDraw.Draw(canvas)
 
-    # 1. Header
+    # 1. Header Fades
     if m['h_op'] > 0.05:
-        draw.text((WIDTH//2, m['hy_1']), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, int(255*m['h_op'])), anchor="mm")
-        draw.text((WIDTH//2, m['hy_2']), MP_LOTTERY_TITLE, font=load_font("black", 68), fill=(255, 255, 255, int(255*m['h_op'])), anchor="mm")
+        draw.text((WIDTH//2, m['hy_1']), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, int(255 * m['h_op'])), anchor="mm")
+        draw.text((WIDTH//2, m['hy_2']), MP_LOTTERY_TITLE, font=load_font("black", 68), fill=(255, 255, 255, int(255 * m['h_op'])), anchor="mm")
 
-    # 2. Giant Canvas Crop
-    visible_cards = MP_GIANT_CANVAS.crop((0, m['scroll_y'], WIDTH, m['scroll_y'] + HEIGHT))
+    # 2. Instant Crop of Giant Canvas
+    cards_layer = MP_BIG_CARDS_LAYER.crop((0, m['crop_y'], WIDTH, m['crop_y'] + HEIGHT))
+    cards_layer.putalpha(ImageChops.multiply(cards_layer.split()[3], MP_SCROLL_MASK))
 
-    # 3. Light Sweep Masking
+    if m['c_op'] < 1.0:
+        if m['c_op'] == 0.0:
+            cards_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+        else:
+            cards_layer.putalpha(cards_layer.split()[3].point(lambda p: p * m['c_op']))
+
+    # 3. Light Sweep
     beam_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     beam_layer.paste(MP_BEAM_TEMPLATE, (m['beam_x'] - 350, 0))
     masked_beam = beam_layer.copy()
-    masked_beam.putalpha(ImageChops.multiply(beam_layer.split()[3], visible_cards.split()[3]))
-    visible_cards.alpha_composite(masked_beam)
-    canvas.alpha_composite(visible_cards)
+    masked_beam.putalpha(ImageChops.multiply(beam_layer.split()[3], cards_layer.split()[3]))
+    cards_layer.alpha_composite(masked_beam)
+    canvas.alpha_composite(cards_layer)
 
-    # 4. Stars
-    for cx, cy, s, op in m['glitters']:
-        draw.line([(cx-s, cy), (cx+s, cy)], fill=(255, 255, 255, op), width=2)
-        draw.line([(cx, cy-s), (cx, cy+s)], fill=(255, 255, 255, op), width=2)
+    # 4. Stars / Glitter
+    if m['glitters']:
+        g_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+        g_draw = ImageDraw.Draw(g_layer)
+        for cx, cy, s, op in m['glitters']:
+            g_draw.line([(cx-s, cy), (cx+s, cy)], fill=(255, 255, 255, op), width=2)
+            g_draw.line([(cx, cy-s), (cx, cy+s)], fill=(255, 255, 255, op), width=2)
+            g_draw.ellipse([cx-3, cy-3, cx+3, cy+3], fill=(255, 255, 255, op))
+        canvas.alpha_composite(g_layer)
 
     # 5. Ribbon
-    if m['r_op']:
-        canvas.alpha_composite(MP_RIBBON_ASSET)
+    if m['r_op'] > 0.01:
+        if m['r_op'] < 1.0:
+            ribbon_fade = MP_RIBBON_ASSET.copy()
+            ribbon_fade.putalpha(ribbon_fade.split()[3].point(lambda p: p * m['r_op']))
+            canvas.alpha_composite(ribbon_fade)
+        else:
+            canvas.alpha_composite(MP_RIBBON_ASSET)
 
     return cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR)
 
-
+# ==========================================
+# 4. VIDEO RENDERING ENGINES
+# ==========================================
 def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, duration_sec):
-    print(f"[LOG] OpenCV Single Core Render (Bang): {out_path}")
+    print(f"**[LOG]** OpenCV Fast Render (Bang): {out_path}", flush=True)
     bg_asset = Image.open(bg_path).convert("RGBA")
     total_frames = FPS * duration_sec
     
@@ -336,24 +359,30 @@ def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, dur
         if time_sec > 0.8:
             hp = min((time_sec - 0.8) / 0.2, 1.0)
             scale = 5.0 - (ease_out_expo(hp) * 4.0)
+            w_h, h_h = max(int(WIDTH * scale), 1), max(int(HEIGHT * scale), 1)
             draw.text((WIDTH//2, 570), ticket_num, font=load_font("hero", int(320*scale)), fill=(255, 255, 255, int(255*hp)), stroke_width=4, stroke_fill=(255, 215, 0, int(255*hp)), anchor="mm")
             
         out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
+        
+        if frame > 0 and frame % 60 == 0:
+            print(f"**[LOG]** Rendered Frame {frame}/{total_frames}...", flush=True)
 
     out.release()
-    print(f"[LOG] Compressing {out_path} via FFmpeg...")
+    print(f"**[LOG]** FFmpeg Compressing {out_path}...", flush=True)
     subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", out_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(raw_path): os.remove(raw_path)
     return out_path
 
 def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out_path, duration_sec, is_4col):
-    print(f"[LOG] Multiprocessing 3-Core Render (Scroll): {out_path}")
+    print(f"**[LOG]** Multiprocessing 3-Core Render (Scroll): {out_path}", flush=True)
     total_frames = FPS * duration_sec
     cols = 4 if is_4col else 2
     
-    # 1. THE GIANT CANVAS TRICK (Drawn once)
+    # 1. GIANT CANVAS
     rows = math.ceil(len(numbers_list) / cols)
+    max_scroll = max(0, rows * (150 if is_4col else 200) - 400)
     total_canvas_h = max(HEIGHT, 440 + (rows * (150 if is_4col else 200)) + 600)
+    
     giant_canvas = Image.new("RGBA", (WIDTH, total_canvas_h), (0,0,0,0))
     g_draw = ImageDraw.Draw(giant_canvas)
     
@@ -365,13 +394,13 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
         g_draw.rounded_rectangle([c_x-cw//2, c_y-ch//2, c_x+cw//2, c_y+ch//2], radius=15, fill=(15, 5, 20, 240), outline=(255, 215, 0, 200), width=3)
         g_draw.text((c_x, c_y), num, font=load_font("hero", 80 if is_4col else 95), fill=(255, 250, 240, 255), anchor="mm")
 
-    # Scroll fade mask
-    fade_start, fade_end = 360, 420
-    mask = Image.new("L", (WIDTH, total_canvas_h), 255)
+    # Scroll Mask
+    mask = Image.new("L", (WIDTH, HEIGHT), 0)
     m_draw = ImageDraw.Draw(mask)
-    m_draw.rectangle([0, 0, WIDTH, fade_start], fill=0)
-    for y in range(fade_start, fade_end): m_draw.line([(0, y), (WIDTH, y)], fill=int(255 * (y - fade_start) / (fade_end - fade_start)))
-    giant_canvas.putalpha(ImageChops.multiply(giant_canvas.split()[3], mask))
+    fade_start, fade_end = 360, 420
+    for y in range(fade_start, fade_end):
+        m_draw.line([(0, y), (WIDTH, y)], fill=int(255 * (y - fade_start) / (fade_end - fade_start)))
+    m_draw.rectangle([0, fade_end, WIDTH, HEIGHT], fill=255)
 
     # Ribbon
     ribbon_asset = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
@@ -384,23 +413,47 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
     r_draw.text((cx, cy-2), prize_heading, font=load_font("extrabold", 44), fill=(255, 224, 102, 255), anchor="mm") 
     r_draw.text((cx, cy-5), prize_heading, font=load_font("extrabold", 44), fill=(58, 5, 0, 255), anchor="mm")
 
-    # 2. MATH CACHE (Pre-compute everything so threads do zero math)[span_4](start_span)[span_4](end_span)
-    max_scroll = max(0, rows * (150 if is_4col else 200) - 400)
+    # 2. EXACT MATH CACHE (Just like ninthprice.py)
+    print("**[LOG]** Pre-calculating Frame Math...", flush=True)
     math_cache = []
     glitters = []
     
     for frame in range(total_frames):
         time_sec = frame / FPS
-        h_op = ease_out_expo(min(time_sec / 0.5, 1.0)) if time_sec > 0.0 else 0.0
         
-        scroll_start, scroll_end = 2.0, max(2.5, duration_sec - 2.0)
-        scroll_y = 0
-        if scroll_start < time_sec < scroll_end:
-            scroll_y = int(max_scroll * ease_in_out_cubic((time_sec - scroll_start) / (scroll_end - scroll_start)))
-        elif time_sec >= scroll_end:
-            scroll_y = max_scroll
+        # Header Opacity
+        h_op = 0.0
+        hy_1, hy_2 = 60, 135
+        if time_sec > 0.0:
+            hp = min(max(time_sec / 0.5, 0.0), 1.0)
+            h_op = ease_out_expo(hp)
+            hy_1 = int(60 - (30 * (1 - h_op)))
+            hy_2 = int(135 - (30 * (1 - h_op)))
             
-        if random.random() < 0.5: glitters.append({'x': random.randint(300, 1620), 'y': random.randint(400, 1000), 'life': 1.0, 's': random.randint(8, 20)})
+        # Scroll Logic
+        crop_y = 0
+        scroll_start, scroll_end = 2.0, max(2.5, duration_sec - 2.0)
+        if scroll_start < time_sec < scroll_end:
+            progress = (time_sec - scroll_start) / (scroll_end - scroll_start)
+            crop_y = int(max_scroll * ease_in_out_cubic(progress))
+        elif time_sec >= scroll_end:
+            crop_y = max_scroll
+            
+        # Card Opacity
+        c_op = 1.0
+        if time_sec < 0.8:
+            c_op = max((time_sec - 0.2) / 0.6, 0.0)
+            
+        # Beam & Ribbon
+        beam_x = int(-400 + (2800 * ((time_sec % 3.0) / 3.0)))
+        r_op = 0.0
+        if time_sec > 0.2:
+            r_op = ease_out_expo(min(max((time_sec - 0.2) / 0.5, 0.0), 1.0))
+
+        # Glitters
+        if random.random() < 0.5:
+            glitters.append({'x': random.randint(150, 1770), 'y': random.randint(400, 1000), 'life': 1.0, 's': random.randint(10, 25)})
+        
         frame_glitters = []
         for g in glitters:
             if g['life'] > 0:
@@ -408,45 +461,48 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
                 pulse = math.sin(g['life'] * math.pi)
                 frame_glitters.append((g['x'], g['y'], int(g['s'] * pulse), int(255 * max(pulse, 0))))
         glitters = [g for g in glitters if g['life'] > 0]
-        
+
         math_cache.append({
-            'h_op': h_op, 'hy_1': int(60 - (30 * (1 - h_op))), 'hy_2': int(135 - (30 * (1 - h_op))),
-            'scroll_y': scroll_y, 'r_op': time_sec > 0.2, 'beam_x': int(-400 + (2800 * ((time_sec % 2.5) / 2.5))),
-            'glitters': frame_glitters
+            'h_op': h_op, 'hy_1': hy_1, 'hy_2': hy_2, 'crop_y': crop_y, 
+            'c_op': c_op, 'beam_x': beam_x, 'r_op': r_op, 'glitters': frame_glitters
         })
 
-    # Set up globals for worker processes[span_5](start_span)[span_5](end_span)
-    init_mp_assets(bg_path, ribbon_asset, giant_canvas, math_cache, lottery_title)
+    # 3. TURBO MULTIPROCESSING
+    init_worker_assets(bg_path, ribbon_asset, mask, giant_canvas, math_cache, lottery_title)
 
-    # 3. TURBO MULTIPROCESSING RENDER[span_6](start_span)[span_6](end_span)
     raw_path = out_path.replace(".mp4", "_raw.mp4")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
     
     workers = min(3, os.cpu_count() or 1)
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
-        for bgr_frame in executor.map(mp_render_single_frame, range(total_frames), chunksize=15):
-            out.write(bgr_frame)
-            
-    out.release()
+    start_time = time.time()
     
-    print(f"[LOG] Compressing {out_path} via FFmpeg...")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+        for frame_index, bgr_frame in enumerate(executor.map(mp_render_single_frame, range(total_frames), chunksize=15)):
+            out.write(bgr_frame)
+            if frame_index > 0 and frame_index % 150 == 0:
+                elapsed = time.time() - start_time
+                fps_speed = frame_index / elapsed if elapsed > 0 else 0
+                print(f"**[LOG]** Processed {frame_index}/{total_frames} frames @ {fps_speed:.1f} fps", flush=True)
+
+    out.release()
+    print(f"**[LOG]** FFmpeg Compressing {out_path}...", flush=True)
     subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", out_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(raw_path): os.remove(raw_path)
     return out_path
 
 # ==========================================
-# 4. BOT PIPELINE (Sequential with New Messages)
+# 5. BOT PIPELINE (Sequential with New Messages)
 # ==========================================
 async def execute_result_pipeline(app, chat_id, target_url):
-    print(f"[LOG] Executing Pipeline for URL: {target_url}")
+    print(f"**[LOG]** Executing Pipeline for URL: {target_url}", flush=True)
     await app.send_message(chat_id, "🔎 **Fetching lottery draw data...**")
     
     text_msg, tts_txt, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
     if not prizes:
         return await app.send_message(chat_id, "❌ Scraping failed or no data found.")
 
-    # 1. Send Text
+    # 1. Send Text Chunks
     chunks = [text_msg[i:i+4000] for i in range(0, len(text_msg), 4000)]
     for chunk in chunks:
         await app.send_message(chat_id, chunk)
@@ -454,7 +510,7 @@ async def execute_result_pipeline(app, chat_id, target_url):
         
     # 2. Send TTS Document
     if tts_txt and tts_txt.strip():
-        print(f"[LOG] Sending TTS Text Document for {draw_date}...")
+        print(f"**[LOG]** Sending TTS Text Document for {draw_date}...", flush=True)
         tts_file = io.BytesIO(tts_txt.encode('utf-8'))
         tts_file.name = f"TTS_{draw_date}.txt"
         await app.send_document(
@@ -515,10 +571,10 @@ async def execute_result_pipeline(app, chat_id, target_url):
     await status_msg.delete()
     for f in video_files + [FINAL_OUTPUT_VIDEO, list_path]: 
         if os.path.exists(f): os.remove(f)
-    print("[LOG] Process Complete.")
+    print("**[LOG]** Process Complete.", flush=True)
 
 # ==========================================
-# 5. ASYNC PYROFORK BOT
+# 6. ASYNC PYROFORK BOT
 # ==========================================
 async def run_pyrofork_bot():
     try:
@@ -566,16 +622,16 @@ async def run_pyrofork_bot():
             await execute_result_pipeline(app, callback_query.message.chat.id, target_url)
 
         await app.start()
-        print("[LOG] Bot Started Successfully.")
+        print("**[LOG]** Bot Started Successfully.", flush=True)
         await asyncio.Event().wait()
     except Exception as e:
-        print(f"[CRITICAL ERROR] Bot thread crashed: {e}")
+        print(f"**[CRITICAL ERROR]** Bot thread crashed: {e}", flush=True)
     finally:
         if 'app' in locals() and app.is_initialized:
             await app.stop()
 
 # ==========================================
-# 6. STREAMLIT THREADING
+# 7. STREAMLIT THREADING
 # ==========================================
 @st.cache_resource
 def start_bot_thread():
@@ -585,7 +641,7 @@ def start_bot_thread():
             asyncio.set_event_loop(loop)
             loop.run_until_complete(run_pyrofork_bot())
         except Exception as e:
-            print(f"[CRITICAL ERROR] Async loop crashed: {e}")
+            print(f"**[CRITICAL ERROR]** Async loop crashed: {e}", flush=True)
     threading.Thread(target=run_async_loop, daemon=True).start()
 
 start_bot_thread()
