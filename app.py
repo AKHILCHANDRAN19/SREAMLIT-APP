@@ -178,7 +178,7 @@ def parse_lottery_result_page(target_url: str):
         h1_tag = soup.find('h1', class_='entry-title')
         raw_title = h1_tag.get_text(strip=True) if h1_tag else "KERALA LOTTERY"
         
-                # --- BLACKLIST KEYWORD CLEANUP ---
+        # --- BLACKLIST KEYWORD CLEANUP ---
         blacklist_regex = r'(?i)\b(?:KERALA|LOTTERIES|LOTTERY|RESULTS?|TODAY|OFFICIAL|LIVE)\b|\d{2}[/-]\d{2}[/-]\d{4}|:'
         clean_lottery_title = re.sub(blacklist_regex, '', raw_title)
         clean_lottery_title = re.sub(r'\s+', ' ', clean_lottery_title).strip().upper()
@@ -324,9 +324,16 @@ def pre_render_ribbon_bang(title_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
     cx, cy = WIDTH//2, 310
-    w, h = 1040, 130
+    font = load_font("extrabold", 44)
+    
+    # --- DYNAMIC RIBBON WIDTH ---
+    bbox = draw.textbbox((0, 0), title_text.upper(), font=font)
+    text_w = bbox[2] - bbox[0]
+    w = max(1040, text_w + 120)
+    h = 130
     x1, y1 = cx - w//2, cy - h//2
     x2, y2 = cx + w//2, cy + h//2
+    # ----------------------------
     
     mask_c = Image.new("L", (WIDTH, HEIGHT), 0)
     ImageDraw.Draw(mask_c).rectangle([x1, y1, x2, y2], fill=255)
@@ -338,7 +345,6 @@ def pre_render_ribbon_bang(title_text):
     layer.paste(grad_layer, (0,0), mask_c)
     draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=3)
     
-    font = load_font("extrabold", 44)
     draw.text((cx, cy-2), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
     draw.text((cx, cy-5), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
     
@@ -353,9 +359,16 @@ def pre_render_ribbon_scroll(title_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
     cx, cy = WIDTH//2, 280
-    w, h = 1040, 120
+    font = load_font("extrabold", 44)
+    
+    # --- DYNAMIC RIBBON WIDTH ---
+    bbox = draw.textbbox((0, 0), title_text.upper(), font=font)
+    text_w = bbox[2] - bbox[0]
+    w = max(1040, text_w + 120)
+    h = 120
     x1, y1 = cx - w//2, cy - h//2
     x2, y2 = cx + w//2, cy + h//2
+    # ----------------------------
     
     mask_c = Image.new("L", (WIDTH, HEIGHT), 0)
     ImageDraw.Draw(mask_c).rectangle([x1, y1, x2, y2], fill=255)
@@ -367,7 +380,6 @@ def pre_render_ribbon_scroll(title_text):
     layer.paste(grad_layer, (0,0), mask_c)
     draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=3)
     
-    font = load_font("extrabold", 44)
     draw.text((cx, cy-2), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
     draw.text((cx, cy-5), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
     
@@ -402,26 +414,6 @@ def pre_render_hero_text(text):
     grad_layer.paste(grad, (0, text_y_start))
     layer.paste(grad_layer, (0, 0), mask)
     draw.text((cx, cy), text, font=font, fill=None, outline=(255, 240, 150, 255), stroke_width=4, anchor="mm")
-    return layer
-
-def pre_render_glass_card(district_text):
-    layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    draw = ImageDraw.Draw(layer)
-    bounds = [500, 780, 1420, 1000]
-    draw.rounded_rectangle(bounds, radius=30, fill=(20, 10, 35, 230), outline=(255, 215, 0, 190), width=4)
-    draw.rounded_rectangle([bounds[0]+2, bounds[1]+2, bounds[2]-2, bounds[3]-2], radius=28, outline=(255, 255, 255, 100), width=2)
-    
-    f_sub = load_font("bold", 48) 
-    f_main = load_font("black", 85) 
-    draw.text((WIDTH//2, 835), "WINNING DISTRICT", font=f_sub, fill="#B8C0D0", anchor="mm")
-    main_y = 925
-    
-    glow = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    ImageDraw.Draw(glow).text((WIDTH//2, main_y), district_text, font=f_main, fill=(255, 215, 0, 120), anchor="mm")
-    layer.alpha_composite(glow.filter(ImageFilter.GaussianBlur(15)))
-    
-    draw.text((WIDTH//2, main_y + 5), district_text, font=f_main, fill=(0,0,0,230), anchor="mm")
-    draw.text((WIDTH//2, main_y), district_text, font=f_main, fill="#FFFFFF", anchor="mm")
     return layer
 
 def pre_render_grid_card(text, is_small=False):
@@ -538,10 +530,17 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, durat
     
     # --- DYNAMIC STAR ANCHORS ---
     temp_draw = ImageDraw.Draw(Image.new("RGBA", (1,1)))
-    bbox = temp_draw.textbbox((0, 0), district, font=load_font("black", 85))
-    box_w = max(920, (bbox[2] - bbox[0]) + 160)
+    
+    # District Glass Box
+    bbox_glass = temp_draw.textbbox((0, 0), district, font=load_font("black", 85))
+    box_w = max(920, (bbox_glass[2] - bbox_glass[0]) + 160)
     x1, x2 = (WIDTH // 2) - (box_w // 2), (WIDTH // 2) + (box_w // 2)
     glass_bounds = [x1, 780, x2, 1000]
+    
+    # Golden Ribbon Box
+    bbox_ribbon = temp_draw.textbbox((0, 0), prize_heading.upper(), font=load_font("extrabold", 44))
+    ribbon_w = max(1040, (bbox_ribbon[2] - bbox_ribbon[0]) + 120)
+    rx = (ribbon_w // 2) - 40
     # ----------------------------
     
     box_glitters = [
@@ -549,10 +548,11 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, durat
         {'x': glass_bounds[2], 'y': glass_bounds[1], 'phase': random.uniform(0, 6), 'speed': 0.12},
         {'x': glass_bounds[0], 'y': glass_bounds[3], 'phase': random.uniform(0, 6), 'speed': 0.18},
         {'x': glass_bounds[2], 'y': glass_bounds[3], 'phase': random.uniform(0, 6), 'speed': 0.14},
-        {'x': WIDTH//2 - 480, 'y': 310 - 50, 'phase': random.uniform(0, 6), 'speed': 0.10},
-        {'x': WIDTH//2 + 480, 'y': 310 - 50, 'phase': random.uniform(0, 6), 'speed': 0.15},
-        {'x': WIDTH//2 - 480, 'y': 310 + 50, 'phase': random.uniform(0, 6), 'speed': 0.12},
-        {'x': WIDTH//2 + 480, 'y': 310 + 50, 'phase': random.uniform(0, 6), 'speed': 0.17},
+        # Ribbon stars
+        {'x': WIDTH//2 - rx, 'y': 310 - 50, 'phase': random.uniform(0, 6), 'speed': 0.10},
+        {'x': WIDTH//2 + rx, 'y': 310 - 50, 'phase': random.uniform(0, 6), 'speed': 0.15},
+        {'x': WIDTH//2 - rx, 'y': 310 + 50, 'phase': random.uniform(0, 6), 'speed': 0.12},
+        {'x': WIDTH//2 + rx, 'y': 310 + 50, 'phase': random.uniform(0, 6), 'speed': 0.17},
     ]
 
     for frame in range(total_frames):
@@ -686,11 +686,19 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     math_cache = []
     floating_glitters = []
     
+    # --- DYNAMIC STAR ANCHORS ---
+    temp_draw = ImageDraw.Draw(Image.new("RGBA", (1,1)))
+    font_ribbon = load_font("extrabold", 44)
+    bbox_ribbon = temp_draw.textbbox((0, 0), prize_heading.upper(), font=font_ribbon)
+    ribbon_w = max(1040, (bbox_ribbon[2] - bbox_ribbon[0]) + 120)
+    rx = (ribbon_w // 2) - 40
+    # ----------------------------
+
     badge_glitters_state = [
-        {'x': WIDTH//2 - 480, 'y': 280 - 50, 'phase': random.uniform(0, 6), 'speed': 0.10},
-        {'x': WIDTH//2 + 480, 'y': 280 - 50, 'phase': random.uniform(0, 6), 'speed': 0.15},
-        {'x': WIDTH//2 - 480, 'y': 280 + 50, 'phase': random.uniform(0, 6), 'speed': 0.12},
-        {'x': WIDTH//2 + 480, 'y': 280 + 50, 'phase': random.uniform(0, 6), 'speed': 0.17},
+        {'x': WIDTH//2 - rx, 'y': 280 - 50, 'phase': random.uniform(0, 6), 'speed': 0.10},
+        {'x': WIDTH//2 + rx, 'y': 280 - 50, 'phase': random.uniform(0, 6), 'speed': 0.15},
+        {'x': WIDTH//2 - rx, 'y': 280 + 50, 'phase': random.uniform(0, 6), 'speed': 0.12},
+        {'x': WIDTH//2 + rx, 'y': 280 + 50, 'phase': random.uniform(0, 6), 'speed': 0.17},
     ]
     
     for frame in range(total_frames):
