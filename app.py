@@ -11,6 +11,7 @@ import time
 import numpy as np
 import cv2
 import subprocess
+import concurrent.futures
 from datetime import datetime
 from bs4 import BeautifulSoup
 from pyrogram import Client, filters
@@ -63,7 +64,7 @@ ALPHA_TO_ML = {
     'A': 'എ', 'B': 'ബി', 'C': 'സി', 'D': 'ഡി', 'E': 'ഇ', 'F': 'എഫ്',
     'G': 'ജി', 'H': 'എച്ച്', 'I': 'ഐ', 'J': 'ജെ', 'K': 'കെ', 'L': 'എൽ',
     'M': 'എം', 'N': 'എൻ', 'O': 'ഓ', 'P': 'പി', 'Q': 'ക്യു', 'R': 'ആർ',
-    'S': 'എസ്', 'T': 'ടി', 'U': 'യു', 'V': 'വി', 'W': 'ഡബ്ല്യു', 'X': 'എക്ক্স',
+    'S': 'എസ്', 'T': 'ടി', 'U': 'യു', 'V': 'വി', 'W': 'ഡബ്ല്യു', 'X': 'എക്സ്',
     'Y': 'വൈ', 'Z': 'സെഡ്'
 }
 
@@ -184,7 +185,7 @@ def parse_lottery_result_page(target_url: str):
         return None, None, None, {}, {}, None
 
 # ==========================================
-# 2. OPTIMIZED VIDEO GENERATION ENGINES
+# 2. UTILITIES & BACKGROUND PRE-RENDERER
 # ==========================================
 def ease_out_expo(x): return 1 if x == 1 else 1 - math.pow(2, -10 * x)
 def ease_in_out_cubic(x): return 4 * x**3 if x < 0.5 else 1 - math.pow(-2 * x + 2, 3) / 2
@@ -230,17 +231,65 @@ def create_and_save_backgrounds():
         bg_paths[name] = path
     return bg_paths
 
-def init_ffmpeg_pipe(out_path):
-    cmd = [
-        'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
-        '-s', f'{WIDTH}x{HEIGHT}', '-pix_fmt', 'bgr24', '-r', str(FPS),
-        '-i', '-', '-c:v', 'libx264', '-preset', 'ultrafast',
-        '-crf', '26', '-pix_fmt', 'yuv420p', out_path
-    ]
-    return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# ==========================================
+# 3. MULTIPROCESSING GLOBALS & RENDERERS
+# ==========================================
+# These inherit natively to worker processes on Linux (Streamlit Cloud via fork)
+MP_BG_ASSET = None
+MP_RIBBON_ASSET = None
+MP_GIANT_CANVAS = None
+MP_MATH_CACHE = []
+MP_BEAM_TEMPLATE = None
+MP_LOTTERY_TITLE = ""
+
+def init_mp_assets(bg_path, ribbon, giant_canvas, math_cache, title):
+    global MP_BG_ASSET, MP_RIBBON_ASSET, MP_GIANT_CANVAS, MP_MATH_CACHE, MP_BEAM_TEMPLATE, MP_LOTTERY_TITLE
+    MP_BG_ASSET = Image.open(bg_path).convert("RGBA")
+    MP_RIBBON_ASSET = ribbon
+    MP_GIANT_CANVAS = giant_canvas
+    MP_MATH_CACHE = math_cache
+    MP_LOTTERY_TITLE = title
+    
+    # Pre-render light sweep template
+    bt = Image.new("RGBA", (800, HEIGHT), (0,0,0,0))
+    ImageDraw.Draw(bt).polygon([(500, 0), (700, 0), (200, HEIGHT), (0, HEIGHT)], fill=(255, 255, 255, 120))
+    MP_BEAM_TEMPLATE = bt.filter(ImageFilter.GaussianBlur(15))
+
+def mp_render_single_frame(frame_index):
+    m = MP_MATH_CACHE[frame_index]
+    canvas = MP_BG_ASSET.copy()
+    draw = ImageDraw.Draw(canvas)
+
+    # 1. Header
+    if m['h_op'] > 0.05:
+        draw.text((WIDTH//2, m['hy_1']), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, int(255*m['h_op'])), anchor="mm")
+        draw.text((WIDTH//2, m['hy_2']), MP_LOTTERY_TITLE, font=load_font("black", 68), fill=(255, 255, 255, int(255*m['h_op'])), anchor="mm")
+
+    # 2. Giant Canvas Crop
+    visible_cards = MP_GIANT_CANVAS.crop((0, m['scroll_y'], WIDTH, m['scroll_y'] + HEIGHT))
+
+    # 3. Light Sweep Masking
+    beam_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+    beam_layer.paste(MP_BEAM_TEMPLATE, (m['beam_x'] - 350, 0))
+    masked_beam = beam_layer.copy()
+    masked_beam.putalpha(ImageChops.multiply(beam_layer.split()[3], visible_cards.split()[3]))
+    visible_cards.alpha_composite(masked_beam)
+    canvas.alpha_composite(visible_cards)
+
+    # 4. Stars
+    for cx, cy, s, op in m['glitters']:
+        draw.line([(cx-s, cy), (cx+s, cy)], fill=(255, 255, 255, op), width=2)
+        draw.line([(cx, cy-s), (cx, cy+s)], fill=(255, 255, 255, op), width=2)
+
+    # 5. Ribbon
+    if m['r_op']:
+        canvas.alpha_composite(MP_RIBBON_ASSET)
+
+    return cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR)
+
 
 def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, duration_sec):
-    print(f"[LOG] Direct FFmpeg Streaming (Bang): {out_path}")
+    print(f"[LOG] OpenCV Single Core Render (Bang): {out_path}")
     bg_asset = Image.open(bg_path).convert("RGBA")
     total_frames = FPS * duration_sec
     
@@ -253,6 +302,7 @@ def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, dur
     ribbon_asset = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     r_draw = ImageDraw.Draw(ribbon_asset)
     cx, cy, w, h = WIDTH//2, 310, 1040, 130
+    ImageDraw.Draw(Image.new("L", (WIDTH, HEIGHT), 0)).rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=255)
     grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     grad_layer.paste(generate_vertical_gradient(WIDTH, h, [(0.0, (255, 245, 180)), (0.15, (255, 215, 0)), (0.85, (230, 150, 0)), (1.0, (180, 100, 0))]), (0, cy-h//2))
     ribbon_asset.paste(grad_layer, (0,0), Image.new("L", (WIDTH, HEIGHT), 0).rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=255) or None)
@@ -260,8 +310,10 @@ def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, dur
     r_draw.text((cx, cy-2), prize_heading, font=load_font("extrabold", 44), fill=(255, 224, 102, 255), anchor="mm") 
     r_draw.text((cx, cy-5), prize_heading, font=load_font("extrabold", 44), fill=(58, 5, 0, 255), anchor="mm")
 
-    process = init_ffmpeg_pipe(out_path)
-
+    raw_path = out_path.replace(".mp4", "_raw.mp4")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
+    
     for frame in range(total_frames):
         time_sec = frame / FPS
         canvas = bg_asset.copy()
@@ -286,20 +338,20 @@ def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, dur
             scale = 5.0 - (ease_out_expo(hp) * 4.0)
             draw.text((WIDTH//2, 570), ticket_num, font=load_font("hero", int(320*scale)), fill=(255, 255, 255, int(255*hp)), stroke_width=4, stroke_fill=(255, 215, 0, int(255*hp)), anchor="mm")
             
-        bgr_frame = cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR)
-        process.stdin.write(bgr_frame.tobytes())
+        out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
 
-    process.stdin.close()
-    process.wait()
+    out.release()
+    print(f"[LOG] Compressing {out_path} via FFmpeg...")
+    subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", out_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if os.path.exists(raw_path): os.remove(raw_path)
     return out_path
 
 def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out_path, duration_sec, is_4col):
-    print(f"[LOG] Direct FFmpeg Streaming (Giant Canvas Scroll): {out_path}")
-    bg_asset = Image.open(bg_path).convert("RGBA")
+    print(f"[LOG] Multiprocessing 3-Core Render (Scroll): {out_path}")
     total_frames = FPS * duration_sec
     cols = 4 if is_4col else 2
     
-    # --- 1. THE GIANT CANVAS TRICK (Draw once to save RAM and CPU) ---
+    # 1. THE GIANT CANVAS TRICK (Drawn once)
     rows = math.ceil(len(numbers_list) / cols)
     total_canvas_h = max(HEIGHT, 440 + (rows * (150 if is_4col else 200)) + 600)
     giant_canvas = Image.new("RGBA", (WIDTH, total_canvas_h), (0,0,0,0))
@@ -313,6 +365,14 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
         g_draw.rounded_rectangle([c_x-cw//2, c_y-ch//2, c_x+cw//2, c_y+ch//2], radius=15, fill=(15, 5, 20, 240), outline=(255, 215, 0, 200), width=3)
         g_draw.text((c_x, c_y), num, font=load_font("hero", 80 if is_4col else 95), fill=(255, 250, 240, 255), anchor="mm")
 
+    # Scroll fade mask
+    fade_start, fade_end = 360, 420
+    mask = Image.new("L", (WIDTH, total_canvas_h), 255)
+    m_draw = ImageDraw.Draw(mask)
+    m_draw.rectangle([0, 0, WIDTH, fade_start], fill=0)
+    for y in range(fade_start, fade_end): m_draw.line([(0, y), (WIDTH, y)], fill=int(255 * (y - fade_start) / (fade_end - fade_start)))
+    giant_canvas.putalpha(ImageChops.multiply(giant_canvas.split()[3], mask))
+
     # Ribbon
     ribbon_asset = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     r_draw = ImageDraw.Draw(ribbon_asset)
@@ -324,57 +384,56 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
     r_draw.text((cx, cy-2), prize_heading, font=load_font("extrabold", 44), fill=(255, 224, 102, 255), anchor="mm") 
     r_draw.text((cx, cy-5), prize_heading, font=load_font("extrabold", 44), fill=(58, 5, 0, 255), anchor="mm")
 
+    # 2. MATH CACHE (Pre-compute everything so threads do zero math)[span_4](start_span)[span_4](end_span)
     max_scroll = max(0, rows * (150 if is_4col else 200) - 400)
-    process = init_ffmpeg_pipe(out_path)
+    math_cache = []
     glitters = []
-
+    
     for frame in range(total_frames):
         time_sec = frame / FPS
-        canvas = bg_asset.copy()
-        draw = ImageDraw.Draw(canvas)
-
-        if time_sec > 0.0:
-            op = ease_out_expo(min(time_sec / 0.5, 1.0))
-            if op > 0.05:
-                draw.text((WIDTH//2, int(60 - (30 * (1 - op)))), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, int(255*op)), anchor="mm")
-                draw.text((WIDTH//2, int(135 - (30 * (1 - op)))), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, int(255*op)), anchor="mm")
-
-        # Scroll math
-        scroll_y_offset = 0
+        h_op = ease_out_expo(min(time_sec / 0.5, 1.0)) if time_sec > 0.0 else 0.0
+        
         scroll_start, scroll_end = 2.0, max(2.5, duration_sec - 2.0)
+        scroll_y = 0
         if scroll_start < time_sec < scroll_end:
-            prog = (time_sec - scroll_start) / (scroll_end - scroll_start)
-            scroll_y_offset = int(max_scroll * ease_in_out_cubic(prog))
+            scroll_y = int(max_scroll * ease_in_out_cubic((time_sec - scroll_start) / (scroll_end - scroll_start)))
         elif time_sec >= scroll_end:
-            scroll_y_offset = max_scroll
-
-        # Crop window from giant canvas (ZERO DRAW MATH IN LOOP)
-        visible_cards = giant_canvas.crop((0, scroll_y_offset, WIDTH, scroll_y_offset + HEIGHT))
-        canvas.alpha_composite(visible_cards)
-
-        # Draw Stars
-        if random.random() < 0.5:
-            glitters.append({'x': random.randint(300, 1620), 'y': random.randint(400, 1000), 'life': 1.0, 's': random.randint(8, 20)})
+            scroll_y = max_scroll
+            
+        if random.random() < 0.5: glitters.append({'x': random.randint(300, 1620), 'y': random.randint(400, 1000), 'life': 1.0, 's': random.randint(8, 20)})
+        frame_glitters = []
         for g in glitters:
             if g['life'] > 0:
                 g['life'] -= 0.05
                 pulse = math.sin(g['life'] * math.pi)
-                op, s = int(255 * max(pulse, 0)), int(g['s'] * pulse)
-                draw.line([(g['x']-s, g['y']), (g['x']+s, g['y'])], fill=(255, 255, 255, op), width=2)
-                draw.line([(g['x'], g['y']-s), (g['x'], g['y']+s)], fill=(255, 255, 255, op), width=2)
+                frame_glitters.append((g['x'], g['y'], int(g['s'] * pulse), int(255 * max(pulse, 0))))
+        glitters = [g for g in glitters if g['life'] > 0]
+        
+        math_cache.append({
+            'h_op': h_op, 'hy_1': int(60 - (30 * (1 - h_op))), 'hy_2': int(135 - (30 * (1 - h_op))),
+            'scroll_y': scroll_y, 'r_op': time_sec > 0.2, 'beam_x': int(-400 + (2800 * ((time_sec % 2.5) / 2.5))),
+            'glitters': frame_glitters
+        })
 
-        if time_sec > 0.2:
-            canvas.alpha_composite(ribbon_asset)
+    # Set up globals for worker processes[span_5](start_span)[span_5](end_span)
+    init_mp_assets(bg_path, ribbon_asset, giant_canvas, math_cache, lottery_title)
 
-        bgr_frame = cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR)
-        process.stdin.write(bgr_frame.tobytes())
-
-        if frame % 150 == 0: gc.collect() # Prevents memory leaks during long scrolls
-
-    process.stdin.close()
-    process.wait()
+    # 3. TURBO MULTIPROCESSING RENDER[span_6](start_span)[span_6](end_span)
+    raw_path = out_path.replace(".mp4", "_raw.mp4")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
+    
+    workers = min(3, os.cpu_count() or 1)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+        for bgr_frame in executor.map(mp_render_single_frame, range(total_frames), chunksize=15):
+            out.write(bgr_frame)
+            
+    out.release()
+    
+    print(f"[LOG] Compressing {out_path} via FFmpeg...")
+    subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", out_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if os.path.exists(raw_path): os.remove(raw_path)
     return out_path
-
 
 # ==========================================
 # 4. BOT PIPELINE (Sequential with New Messages)
@@ -532,5 +591,5 @@ def start_bot_thread():
 start_bot_thread()
 
 st.title("Kerala Lottery Video Engine 🎬")
-st.write("Bot is running. Uses Threading & Direct FFmpeg Piping for massive speed boosts.")
+st.write("Bot is running. Powered by 3-Core Multiprocessing & Fast OpenCV writing for Maximum Output Speed.")
 
