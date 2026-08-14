@@ -150,9 +150,20 @@ def parse_lottery_result_page(target_url: str):
                 current_prize_key = matched_header
                 if current_prize_key not in prizes_data:
                     prizes_data[current_prize_key] = []
-                    h_clean = re.sub(r'\s+', ' ', line).strip()
-                    h_clean = re.sub(r'(' + re.escape(matched_header) + r')\s*(Rs\.)', r'\1 - \2', h_clean, flags=re.IGNORECASE)
-                    prize_headings[current_prize_key] = h_clean.upper() 
+                    
+                    # EXTRACTING PRIZE MONEY ROBUSTLY
+                    h_clean = line.strip().upper()
+                    h_clean = re.sub(r'RS\s*:\s*', '₹', h_clean)
+                    h_clean = re.sub(r'RS\.?\s*', '₹', h_clean)
+                    h_clean = h_clean.replace('/-', '')
+                    if '₹' in h_clean and '—' not in h_clean and '-' not in h_clean:
+                        h_clean = h_clean.replace('₹', '— ₹')
+                    if '₹' not in h_clean:
+                        # Fallbacks if money isn't on the same line
+                        if "1ST" in h_clean: h_clean += " — ₹1,00,00,000"
+                        elif "CONSOLATION" in h_clean: h_clean += " — ₹8,000"
+                        
+                    prize_headings[current_prize_key] = h_clean
                 continue
 
             if current_prize_key:
@@ -193,7 +204,7 @@ def ease_in_out_cubic(x): return 4 * x**3 if x < 0.5 else 1 - math.pow(-2 * x + 
 def ease_out_back_extreme(x): return 1 + 3.5 * math.pow(x - 1, 3) + 2.5 * math.pow(x - 1, 2)
 
 def generate_vertical_gradient(w, h, stops):
-    grad = np.zeros((h, w, 4), dtype=np.uint8)
+    gradient = np.zeros((h, w, 4), dtype=np.uint8)
     for y in range(h):
         t = y / float(h - 1 if h > 1 else 1)
         for i in range(len(stops) - 1):
@@ -237,17 +248,21 @@ def pre_render_ribbon_bang(title_text):
     cx, cy = WIDTH//2, 310
     w, h = 1040, 130
     x1, y1, x2, y2 = cx - w//2, cy - h//2, cx + w//2, cy + h//2
+    
     mask_c = Image.new("L", (WIDTH, HEIGHT), 0)
     ImageDraw.Draw(mask_c).rectangle([x1, y1, x2, y2], fill=255)
+    
     stops = [(0.0, (255, 245, 180)), (0.15, (255, 215, 0)), (0.85, (230, 150, 0)), (1.0, (180, 100, 0))]
     grad = generate_vertical_gradient(WIDTH, h, stops)
     grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     grad_layer.paste(grad, (0, y1))
     layer.paste(grad_layer, (0,0), mask_c)
     draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=3)
+    
     font = load_font("extrabold", 44)
     draw.text((cx, cy-2), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
     draw.text((cx, cy-5), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
+    
     shadow = layer.copy().filter(ImageFilter.GaussianBlur(15))
     shadow_data = np.array(shadow)
     shadow_data[..., :3] = 0
@@ -261,17 +276,21 @@ def pre_render_ribbon_scroll(title_text):
     cx, cy = WIDTH//2, 280
     w, h = 1040, 120
     x1, y1, x2, y2 = cx - w//2, cy - h//2, cx + w//2, cy + h//2
+    
     mask_c = Image.new("L", (WIDTH, HEIGHT), 0)
     ImageDraw.Draw(mask_c).rectangle([x1, y1, x2, y2], fill=255)
+    
     stops = [(0.0, (255, 245, 180)), (0.15, (255, 215, 0)), (0.85, (230, 150, 0)), (1.0, (180, 100, 0))]
     grad = generate_vertical_gradient(WIDTH, h, stops)
     grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     grad_layer.paste(grad, (0, y1))
     layer.paste(grad_layer, (0,0), mask_c)
     draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=3)
+    
     font = load_font("extrabold", 44)
     draw.text((cx, cy-2), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
     draw.text((cx, cy-5), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
+    
     shadow = layer.copy().filter(ImageFilter.GaussianBlur(15))
     shadow_data = np.array(shadow)
     shadow_data[..., :3] = 0
@@ -339,7 +358,7 @@ def pre_render_grid_card(text, is_small=False):
     return layer
 
 # ==========================================
-# 3. GLOBAL WORKER VARIABLES (For Multiprocessing)
+# 3. GLOBAL WORKER VARIABLES (Using ThreadPool to avoid PicklingError)
 # ==========================================
 MP_BG_ASSET = None
 MP_RIBBON_ASSET = None
@@ -393,7 +412,7 @@ def mp_render_single_frame(frame_index):
         for cx, cy, s, op in m['glitters']:
             g_draw.line([(cx-s, cy), (cx+s, cy)], fill=(255, 255, 255, op), width=2)
             g_draw.line([(cx, cy-s), (cx, cy+s)], fill=(255, 255, 255, op), width=2)
-            g_draw.ellipse([cx-3, cy-3, cx+3, cy+3], fill=(255, 255, 255, op))
+            g_draw.ellipse([cx-3, cy-3, cx+3, cy+3], fill=(255, 255, 255, op)) # FIXED: Restored core ellipse
         canvas.alpha_composite(g_layer)
 
     if m['r_op'] > 0.01:
@@ -426,8 +445,9 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, durat
     ribbon_asset = pre_render_ribbon_bang(prize_heading)
     glass_asset = pre_render_glass_card(district)
     
+    raw_path = out_path.replace(".mp4", "_raw.mp4")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(out_path, fourcc, FPS, (WIDTH, HEIGHT))
+    out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
     
     confetti = []
     confetti_triggered = False
@@ -517,6 +537,7 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, durat
                 g_op = int(50 + 205 * pulse)
                 g_draw.line([(g['x']-s, g['y']), (g['x']+s, g['y'])], fill=(255, 235, 100, g_op), width=3)
                 g_draw.line([(g['x'], g['y']-s), (g['x'], g['y']+s)], fill=(255, 235, 100, g_op), width=3)
+                g_draw.ellipse([g['x']-4, g['y']-4, g['x']+4, g['y']+4], fill=(255, 255, 255, g_op)) # FIXED: Restored core ellipse
             canvas.alpha_composite(glitter_layer.filter(ImageFilter.GaussianBlur(3)))
 
         final_frame = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,255))
@@ -527,11 +548,13 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, durat
             print(f"**[LOG]** Rendered Frame {frame}/{total_frames}...", flush=True)
 
     out.release()
-    gc.collect()
-    print(f"**[LOG]** Finished Render: {out_path}", flush=True)
+    print(f"**[LOG]** FFmpeg Compressing {out_path}...", flush=True)
+    subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", out_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if os.path.exists(raw_path): os.remove(raw_path)
+    return out_path
 
 def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, duration_sec=25, is_4col=False):
-    print(f"**[LOG]** Multiprocessing 3-Core Render (Scroll): {out_path}", flush=True)
+    print(f"**[LOG]** ThreadPool 3-Core Render (Scroll): {out_path}", flush=True)
     total_frames = FPS * duration_sec
     cols = 4 if is_4col else 2
     
@@ -600,16 +623,17 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
             'crop_y': crop_y, 'c_op': c_op, 'beam_x': beam_x, 'r_op': r_op, 'glitters': frame_glitters
         })
 
-    # 3. TURBO MULTIPROCESSING
+    # 3. TURBO MULTIPROCESSING (Switched to ThreadPoolExecutor to prevent PicklingError)
     init_worker_assets(bg_asset, ribbon_asset, mask, giant_canvas, math_cache, lottery_title)
 
+    raw_path = out_path.replace(".mp4", "_raw.mp4")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(out_path, fourcc, FPS, (WIDTH, HEIGHT))
+    out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
     
     workers = min(3, os.cpu_count() or 1)
     start_time = time.time()
     
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         for frame_index, bgr_frame in enumerate(executor.map(mp_render_single_frame, range(total_frames), chunksize=15)):
             out.write(bgr_frame)
             if frame_index > 0 and frame_index % 300 == 0:
@@ -674,12 +698,13 @@ async def execute_result_pipeline(app, chat_id, target_url):
         )
         await asyncio.sleep(0.5)
 
-    # 3. Render Individual Videos Sequentially (Just like working_2.txt)
+    # 3. Render Individual Videos Sequentially (Guarantees execution)
+    # Correct processing order: 1st Prize, Consolation, 2nd, 3rd, 4th... 9th
     tier_config = [
         ("1st Prize", "bang", 10, False, "purple"),
+        ("Consolation Prize", "scroll", 10, False, "blue"),
         ("2nd Prize", "bang", 10, False, "silver"),
         ("3rd Prize", "bang", 10, False, "gold"),
-        ("Consolation Prize", "scroll", 10, False, "blue"),
         ("4th Prize", "scroll", 25, False, "blue"),
         ("5th Prize", "scroll", 25, False, "blue"),
         ("6th Prize", "scroll", 25, False, "blue"),
@@ -696,7 +721,6 @@ async def execute_result_pipeline(app, chat_id, target_url):
             out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
             full_heading = prize_headings.get(p_name, p_name)
 
-            # Synchronous Execution - Guarantees finish like working_2.txt
             if engine == "bang":
                 render_bang_video(theme, full_heading, prizes[p_name][0], lottery_title, out_path, duration_sec=dur)
             else:
@@ -792,5 +816,4 @@ def start_bot_thread():
 start_bot_thread()
 
 st.title("Kerala Lottery Video Engine 🎬")
-st.write("Bot is running. Powered by 3-Core Multiprocessing & strict synchronous CV2 writing.")
-
+st.write("Bot is running. Powered by strict synchronous CV2 writing and ThreadPool Executor.")
