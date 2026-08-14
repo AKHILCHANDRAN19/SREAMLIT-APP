@@ -18,7 +18,48 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
-# --- CONFIGURATION & PATHS ---
+# ==========================================
+# --- USER CONFIGURATION BLOCK ---
+# ==========================================
+
+# 1. SET VIDEO DURATIONS (IN SECONDS)
+DURATION_1ST_PRIZE = 10
+DURATION_CONSOLATION = 16
+DURATION_2ND_PRIZE = 10
+DURATION_3RD_PRIZE = 10
+DURATION_4TH_PRIZE = 25
+DURATION_5TH_PRIZE = 25
+DURATION_6TH_PRIZE = 25
+DURATION_7TH_PRIZE = 90
+DURATION_8TH_PRIZE = 90
+DURATION_9TH_PRIZE = 90
+
+# 2. SCROLL SPEED SETTINGS (START AND END DELAYS)
+# Adjusting these changes how long the scroll waits before starting/ending.
+# Lowering total duration + keeping delays the same = FASTER scrolling.
+
+# Consolation Prize Delays
+CONSOLATION_START_DELAY = 2.0
+CONSOLATION_END_DELAY = 2.0
+
+# 4th Prize Delays
+PRIZE_4TH_START_DELAY = 2.0
+PRIZE_4TH_END_DELAY = 2.0
+
+# 5th Prize Delays
+PRIZE_5TH_START_DELAY = 2.0
+PRIZE_5TH_END_DELAY = 2.0
+
+# 6th Prize Delays
+PRIZE_6TH_START_DELAY = 2.0
+PRIZE_6TH_END_DELAY = 2.0
+
+# 7th to 9th Prize Delays (Common as requested)
+PRIZE_7_8_9_START_DELAY = 2.0
+PRIZE_7_8_9_END_DELAY = 2.0
+
+# ==========================================
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "renders")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -151,29 +192,31 @@ def parse_lottery_result_page(target_url: str):
                 if current_prize_key not in prizes_data:
                     prizes_data[current_prize_key] = []
                     
-                    # ROBUST PRIZE MONEY EXTRACTION
-                    h_clean = line.strip().upper()
+                    # --- PERFECT DYNAMIC PRIZE MONEY EXTRACTION ---
+                    h_clean = line.strip().upper().replace('\xa0', ' ')
+                    h_clean = re.sub(r'RS\.?\s*:?\s*', '₹', h_clean)
+                    h_clean = re.sub(r'RS\s*', '₹', h_clean)
+                    h_clean = h_clean.replace('/-', '').replace('—', '').replace('-', '')
                     
-                    # Add specific hardcoded fallbacks to match requested UI exactly
-                    if "₹" not in h_clean and "RS" not in h_clean:
-                        if "1ST" in h_clean:
-                            h_clean = f"{matched_header.upper()} — ₹1,00,00,000 [1 CRORE]"
-                        elif "CONSOLATION" in h_clean:
-                            h_clean = f"{matched_header.upper()} — ₹8,000"
-                        elif "2ND" in h_clean:
-                            h_clean = f"{matched_header.upper()} — ₹10,00,000"
-                        elif "3RD" in h_clean:
-                            h_clean = f"{matched_header.upper()} — ₹1,00,000"
-                        else:
-                            h_clean = matched_header.upper()
-                    else:
-                        h_clean = re.sub(r'RS\s*:\s*', '₹', h_clean)
-                        h_clean = re.sub(r'RS\.?\s*', '₹', h_clean)
-                        h_clean = h_clean.replace('/-', '')
-                        if '₹' in h_clean and '—' not in h_clean and '-' not in h_clean:
-                            h_clean = h_clean.replace('₹', '— ₹')
-                            
-                    prize_headings[current_prize_key] = h_clean
+                    # Inject hardcoded values if missing entirely for 1st, Consolation, 2nd, 3rd
+                    if '₹' not in h_clean:
+                        if "1ST PRIZE" in h_clean:
+                            h_clean = "1ST PRIZE — ₹1,00,00,000 [1 CRORE]"
+                        elif "CONSOLATION PRIZE" in h_clean:
+                            h_clean = "CONSOLATION PRIZE — ₹8,000"
+                        elif "2ND PRIZE" in h_clean:
+                            h_clean = "2ND PRIZE — ₹10,00,000"
+                        elif "3RD PRIZE" in h_clean:
+                            h_clean = "3RD PRIZE — ₹1,00,000"
+                        
+                    if '₹' in h_clean and '—' not in h_clean:
+                        parts = h_clean.split('₹', 1)
+                        prize_part = parts[0].strip()
+                        money_part = parts[1].strip()
+                        h_clean = f"{prize_part} — ₹{money_part}"
+                    
+                    h_clean = re.sub(r'\s+', ' ', h_clean)
+                    prize_headings[current_prize_key] = h_clean 
                 continue
 
             if current_prize_key:
@@ -214,18 +257,16 @@ def ease_in_out_cubic(x): return 4 * x**3 if x < 0.5 else 1 - math.pow(-2 * x + 
 def ease_out_back_extreme(x): return 1 + 3.5 * math.pow(x - 1, 3) + 2.5 * math.pow(x - 1, 2)
 
 def generate_vertical_gradient(w, h, stops):
-    # Fixed naming issue to identically match original working.txt script
     gradient = np.zeros((h, w, 4), dtype=np.uint8)
     for y in range(h):
         t = y / float(h - 1 if h > 1 else 1)
         for i in range(len(stops) - 1):
             if stops[i][0] <= t <= stops[i+1][0]:
                 range_t = (t - stops[i][0]) / (stops[i+1][0] - stops[i][0])
-                c1, c2 = np.array(stops[i][1]), np.array(stops[i+1][1])
-                c = c1 + (c2 - c1) * range_t
-                gradient[y, :] = [int(c[0]), int(c[1]), int(c[2]), 255]
+                c = np.array(stops[i][1]) + (np.array(stops[i+1][1]) - np.array(stops[i][1])) * range_t
+                grad[y, :] = [int(c[0]), int(c[1]), int(c[2]), 255]
                 break
-    return Image.fromarray(gradient, mode="RGBA")
+    return Image.fromarray(grad, mode="RGBA")
 
 def pre_render_background(theme="blue"):
     themes = {
@@ -257,8 +298,7 @@ def pre_render_background(theme="blue"):
 def pre_render_ribbon_bang(title_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
-    cx, cy = WIDTH//2, 310
-    w, h = 1040, 130
+    cx, cy, w, h = WIDTH//2, 310, 1040, 130
     x1, y1, x2, y2 = cx - w//2, cy - h//2, cx + w//2, cy + h//2
     
     mask_c = Image.new("L", (WIDTH, HEIGHT), 0)
@@ -370,7 +410,7 @@ def pre_render_grid_card(text, is_small=False):
     return layer
 
 # ==========================================
-# 3. GLOBAL WORKER VARIABLES (Using ThreadPool to avoid PicklingError)
+# 3. GLOBAL WORKER VARIABLES (Using ThreadPool)
 # ==========================================
 MP_BG_ASSET = None
 MP_RIBBON_ASSET = None
@@ -418,13 +458,17 @@ def mp_render_single_frame(frame_index):
     cards_layer.alpha_composite(masked_beam)
     canvas.alpha_composite(cards_layer)
 
-    if m['glitters']:
+    if m['badge_glitters'] or m['floating_glitters']:
         g_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
         g_draw = ImageDraw.Draw(g_layer)
-        for cx, cy, s, op in m['glitters']:
-            g_draw.line([(cx-s, cy), (cx+s, cy)], fill=(255, 255, 255, op), width=2)
-            g_draw.line([(cx, cy-s), (cx, cy+s)], fill=(255, 255, 255, op), width=2)
-            g_draw.ellipse([cx-3, cy-3, cx+3, cy+3], fill=(255, 255, 255, op))
+        
+        for glitters in [m['badge_glitters'], m['floating_glitters']]:
+            for cx, cy, s, op in glitters:
+                g_draw.line([(cx-s, cy), (cx+s, cy)], fill=(255, 235, 100, op), width=3)
+                g_draw.line([(cx, cy-s), (cx, cy+s)], fill=(255, 235, 100, op), width=3)
+                g_draw.ellipse([cx-4, cy-4, cx+4, cy+4], fill=(255, 255, 255, op))
+                
+        canvas.alpha_composite(g_layer.filter(ImageFilter.GaussianBlur(3)))
         canvas.alpha_composite(g_layer)
 
     if m['r_op'] > 0.01:
@@ -440,7 +484,7 @@ def mp_render_single_frame(frame_index):
 # ==========================================
 # 4. VIDEO RENDERING ENGINES
 # ==========================================
-def render_bang_video(theme, prize_heading, item, lottery_title, out_path, duration_sec=10):
+def render_bang_video(theme, prize_heading, item, lottery_title, out_path, duration_sec):
     print(f"**[LOG]** Synchronous Bang Render: {out_path}", flush=True)
     bg_asset = pre_render_background(theme)
     total_frames = FPS * duration_sec
@@ -464,11 +508,17 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, durat
     confetti = []
     confetti_triggered = False
     glass_bounds = [500, 780, 1420, 1000]
+    
+    # Stars on Glass Card & Ribbon
     box_glitters = [
         {'x': glass_bounds[0], 'y': glass_bounds[1], 'phase': random.uniform(0, 6), 'speed': 0.15},
         {'x': glass_bounds[2], 'y': glass_bounds[1], 'phase': random.uniform(0, 6), 'speed': 0.12},
         {'x': glass_bounds[0], 'y': glass_bounds[3], 'phase': random.uniform(0, 6), 'speed': 0.18},
         {'x': glass_bounds[2], 'y': glass_bounds[3], 'phase': random.uniform(0, 6), 'speed': 0.14},
+        {'x': WIDTH//2 - 480, 'y': 310 - 50, 'phase': random.uniform(0, 6), 'speed': 0.10},
+        {'x': WIDTH//2 + 480, 'y': 310 - 50, 'phase': random.uniform(0, 6), 'speed': 0.15},
+        {'x': WIDTH//2 - 480, 'y': 310 + 50, 'phase': random.uniform(0, 6), 'speed': 0.12},
+        {'x': WIDTH//2 + 480, 'y': 310 + 50, 'phase': random.uniform(0, 6), 'speed': 0.17},
     ]
 
     for frame in range(total_frames):
@@ -567,8 +617,8 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, durat
     if os.path.exists(raw_path): os.remove(raw_path)
     return out_path
 
-def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, duration_sec=25, is_4col=False):
-    print(f"**[LOG]** Multiprocessing 3-Core Render (Scroll): {out_path}", flush=True)
+def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, duration_sec, is_4col, start_delay, end_delay):
+    print(f"**[LOG]** ThreadPool 3-Core Render (Scroll): {out_path} (Start Delay: {start_delay}s, End Delay: {end_delay}s)", flush=True)
     total_frames = FPS * duration_sec
     cols = 4 if is_4col else 2
     
@@ -600,13 +650,24 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     # 2. EXACT MATH CACHE
     print("**[LOG]** Pre-calculating Frame Math...", flush=True)
     math_cache = []
-    glitters = []
+    floating_glitters = []
+    
+    # Static stars on the ribbon corners
+    badge_glitters_state = [
+        {'x': WIDTH//2 - 480, 'y': 280 - 50, 'phase': random.uniform(0, 6), 'speed': 0.10},
+        {'x': WIDTH//2 + 480, 'y': 280 - 50, 'phase': random.uniform(0, 6), 'speed': 0.15},
+        {'x': WIDTH//2 - 480, 'y': 280 + 50, 'phase': random.uniform(0, 6), 'speed': 0.12},
+        {'x': WIDTH//2 + 480, 'y': 280 + 50, 'phase': random.uniform(0, 6), 'speed': 0.17},
+    ]
     
     for frame in range(total_frames):
         time_sec = frame / FPS
         h_op = ease_out_expo(min(max(time_sec / 0.5, 0.0), 1.0)) if time_sec > 0.0 else 0.0
         
-        scroll_start, scroll_end = 2.0, max(2.5, duration_sec - 2.0)
+        # APPLYING CUSTOM DELAYS
+        scroll_start = start_delay
+        scroll_end = max(scroll_start + 0.5, duration_sec - end_delay)
+        
         crop_y = 0
         if scroll_start < time_sec < scroll_end:
             progress = (time_sec - scroll_start) / (scroll_end - scroll_start)
@@ -621,20 +682,32 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         beam_x = int(-400 + (2800 * ((time_sec % 3.0) / 3.0)))
         r_op = ease_out_expo(min(max((time_sec - 0.2) / 0.5, 0.0), 1.0)) if time_sec > 0.2 else 0.0
 
+        # Background Floating Glitters
         if random.random() < 0.5:
-            glitters.append({'x': random.randint(150, 1770), 'y': random.randint(400, 1000), 'life': 1.0, 's': random.randint(10, 25)})
+            floating_glitters.append({'x': random.randint(150, 1770), 'y': random.randint(350, 1000), 'life': 1.0, 's': random.randint(10, 25)})
         
-        frame_glitters = []
-        for g in glitters:
+        f_glitters = []
+        for g in floating_glitters:
             if g['life'] > 0:
                 g['life'] -= 0.05
                 pulse = math.sin(g['life'] * math.pi)
-                frame_glitters.append((g['x'], g['y'], int(g['s'] * pulse), int(255 * max(pulse, 0))))
-        glitters = [g for g in glitters if g['life'] > 0]
+                f_glitters.append((g['x'], g['y'], int(g['s'] * pulse), int(255 * max(pulse, 0))))
+        floating_glitters = [g for g in floating_glitters if g['life'] > 0]
+        
+        # Ribbon Badge Glitters
+        b_glitters = []
+        if r_op > 0.5: # Only show stars when ribbon is visible
+            for g in badge_glitters_state:
+                g['phase'] += g['speed']
+                pulse = (math.sin(g['phase']) + 1) / 2
+                s = int(5 + 25 * pulse)
+                op = int(50 + 205 * pulse)
+                b_glitters.append((g['x'], g['y'], s, op))
 
         math_cache.append({
             'h_op': h_op, 'hy_1': int(60 - (30 * (1 - h_op))), 'hy_2': int(135 - (30 * (1 - h_op))),
-            'crop_y': crop_y, 'c_op': c_op, 'beam_x': beam_x, 'r_op': r_op, 'glitters': frame_glitters
+            'crop_y': crop_y, 'c_op': c_op, 'beam_x': beam_x, 'r_op': r_op, 
+            'floating_glitters': f_glitters, 'badge_glitters': b_glitters
         })
 
     # 3. TURBO MULTIPROCESSING
@@ -657,7 +730,6 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
 
     out.release()
     
-    # Free memory globally
     global MP_BG_ASSET, MP_RIBBON_ASSET, MP_SCROLL_MASK, MP_BEAM_TEMPLATE, MP_BIG_CARDS_LAYER, MP_MATH_CACHE
     MP_BG_ASSET = MP_RIBBON_ASSET = MP_SCROLL_MASK = MP_BEAM_TEMPLATE = MP_BIG_CARDS_LAYER = None
     MP_MATH_CACHE = []
@@ -715,32 +787,32 @@ async def execute_result_pipeline(app, chat_id, target_url):
         )
         await asyncio.sleep(0.5)
 
-    # 3. Render Individual Videos Sequentially
+    # 3. Render Individual Videos Sequentially (Strict Order)
     tier_config = [
-        ("1st Prize", "bang", 10, False, "purple"),
-        ("Consolation Prize", "scroll", 10, False, "blue"),
-        ("2nd Prize", "bang", 10, False, "silver"),
-        ("3rd Prize", "bang", 10, False, "gold"),
-        ("4th Prize", "scroll", 25, False, "blue"),
-        ("5th Prize", "scroll", 25, False, "blue"),
-        ("6th Prize", "scroll", 25, False, "blue"),
-        ("7th Prize", "scroll", 90, True, "blue"),
-        ("8th Prize", "scroll", 90, True, "blue"),
-        ("9th Prize", "scroll", 90, True, "blue")
+        ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0, 0),
+        ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_START_DELAY, CONSOLATION_END_DELAY),
+        ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0, 0),
+        ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0, 0),
+        ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_START_DELAY, PRIZE_4TH_END_DELAY),
+        ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_START_DELAY, PRIZE_5TH_END_DELAY),
+        ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_START_DELAY, PRIZE_6TH_END_DELAY),
+        ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
+        ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
+        ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY)
     ]
 
     video_files = []
     
-    for p_name, engine, dur, is_4c, theme in tier_config:
+    for p_name, engine, dur, is_4c, theme, start_delay, end_delay in tier_config:
         if p_name in prizes and prizes[p_name]:
             status_msg = await app.send_message(chat_id, f"🎬 **Rendering {p_name} video ({dur}s)...**\n*(Theme: {theme.upper()})*")
             out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
             full_heading = prize_headings.get(p_name, p_name)
 
             if engine == "bang":
-                render_bang_video(theme, full_heading, prizes[p_name][0], lottery_title, out_path, duration_sec=dur)
+                await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur)
             else:
-                render_scroll_video(theme, full_heading, prizes[p_name], lottery_title, out_path, duration_sec=dur, is_4col=is_4c)
+                await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, start_delay, end_delay)
             
             video_files.append(out_path)
             await status_msg.edit_text(f"🚀 **Uploading {p_name}...**")
