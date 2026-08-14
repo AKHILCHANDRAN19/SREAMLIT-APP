@@ -54,7 +54,7 @@ PRIZE_5TH_END_DELAY = 2.0
 PRIZE_6TH_START_DELAY = 2.0
 PRIZE_6TH_END_DELAY = 2.0
 
-# 7th to 9th Prize Delays (Common as requested)
+# 7th to 9th Prize Delays
 PRIZE_7_8_9_START_DELAY = 2.0
 PRIZE_7_8_9_END_DELAY = 2.0
 
@@ -153,6 +153,21 @@ def fetch_last_10_draws():
         print(f"**[LOG]** Error fetching draws: {e}", flush=True)
         return []
 
+def clean_prize_heading(raw_str, default_key):
+    """Dynamic Regex engine to correctly fetch ANY prize money amount from 1st to 9th."""
+    s = raw_str.replace('\xa0', ' ').strip().upper()
+    s = re.sub(r'(?i)RS\.?\s*:?\s*', '₹', s)
+    s = s.replace('/-', '').replace('—', ' - ').replace('-', ' - ')
+    
+    if '₹' in s:
+        parts = s.split('₹', 1)
+        prize_part = parts[0].replace(':', '').replace('-', '').strip()
+        money_part = parts[1].strip()
+        s = f"{prize_part} — ₹{money_part}"
+    
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
 def parse_lottery_result_page(target_url: str):
     try:
         res = http_get(target_url)
@@ -160,9 +175,6 @@ def parse_lottery_result_page(target_url: str):
         post_body = soup.find('div', id=re.compile(r'post-body-'))
         if not post_body:
             return "❌ Could not parse body.", None, None, {}, {}, None
-
-        full_text = post_body.get_text(separator='\n', strip=True)
-        lines = [line.strip() for line in full_text.split('\n') if line.strip()]
 
         h1_tag = soup.find('h1', class_='entry-title')
         raw_title = h1_tag.get_text(strip=True) if h1_tag else "KERALA LOTTERY"
@@ -172,6 +184,12 @@ def parse_lottery_result_page(target_url: str):
             clean_lottery_title = f"{clean_match.group(1).upper()} ({clean_match.group(2)})"
         else:
             clean_lottery_title = re.sub(r'Kerala Lottery Results:|\bOfficial\b|\bResult\b|\bToday\b|\d{2}-\d{2}-\d{4}', '', raw_title, flags=re.IGNORECASE).strip().upper()
+
+        for tag in post_body.find_all(['p', 'div', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li']):
+            tag.insert_before('\n')
+        
+        full_text = post_body.get_text(separator=' ', strip=True)
+        lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
 
         date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', full_text)
         draw_date = date_match.group(1).replace('/', '-') if date_match else "N/A"
@@ -191,32 +209,7 @@ def parse_lottery_result_page(target_url: str):
                 current_prize_key = matched_header
                 if current_prize_key not in prizes_data:
                     prizes_data[current_prize_key] = []
-                    
-                    # --- PERFECT DYNAMIC PRIZE MONEY EXTRACTION ---
-                    h_clean = line.strip().upper().replace('\xa0', ' ')
-                    h_clean = re.sub(r'RS\.?\s*:?\s*', '₹', h_clean)
-                    h_clean = re.sub(r'RS\s*', '₹', h_clean)
-                    h_clean = h_clean.replace('/-', '').replace('—', '').replace('-', '')
-                    
-                    # Inject hardcoded values if missing entirely for 1st, Consolation, 2nd, 3rd
-                    if '₹' not in h_clean:
-                        if "1ST PRIZE" in h_clean:
-                            h_clean = "1ST PRIZE — ₹1,00,00,000 [1 CRORE]"
-                        elif "CONSOLATION PRIZE" in h_clean:
-                            h_clean = "CONSOLATION PRIZE — ₹8,000"
-                        elif "2ND PRIZE" in h_clean:
-                            h_clean = "2ND PRIZE — ₹10,00,000"
-                        elif "3RD PRIZE" in h_clean:
-                            h_clean = "3RD PRIZE — ₹1,00,000"
-                        
-                    if '₹' in h_clean and '—' not in h_clean:
-                        parts = h_clean.split('₹', 1)
-                        prize_part = parts[0].strip()
-                        money_part = parts[1].strip()
-                        h_clean = f"{prize_part} — ₹{money_part}"
-                    
-                    h_clean = re.sub(r'\s+', ' ', h_clean)
-                    prize_headings[current_prize_key] = h_clean 
+                    prize_headings[current_prize_key] = clean_prize_heading(line, matched_header)
                 continue
 
             if current_prize_key:
@@ -263,8 +256,7 @@ def generate_vertical_gradient(w, h, stops):
         for i in range(len(stops) - 1):
             if stops[i][0] <= t <= stops[i+1][0]:
                 range_t = (t - stops[i][0]) / (stops[i+1][0] - stops[i][0])
-                c1, c2 = np.array(stops[i][1]), np.array(stops[i+1][1])
-                c = c1 + (c2 - c1) * range_t
+                c = np.array(stops[i][1]) + (np.array(stops[i+1][1]) - np.array(stops[i][1])) * range_t
                 gradient[y, :] = [int(c[0]), int(c[1]), int(c[2]), 255]
                 break
     return Image.fromarray(gradient, mode="RGBA")
@@ -510,7 +502,6 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, durat
     confetti_triggered = False
     glass_bounds = [500, 780, 1420, 1000]
     
-    # Stars on Glass Card & Ribbon
     box_glitters = [
         {'x': glass_bounds[0], 'y': glass_bounds[1], 'phase': random.uniform(0, 6), 'speed': 0.15},
         {'x': glass_bounds[2], 'y': glass_bounds[1], 'phase': random.uniform(0, 6), 'speed': 0.12},
@@ -653,7 +644,6 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     math_cache = []
     floating_glitters = []
     
-    # Static stars on the ribbon corners
     badge_glitters_state = [
         {'x': WIDTH//2 - 480, 'y': 280 - 50, 'phase': random.uniform(0, 6), 'speed': 0.10},
         {'x': WIDTH//2 + 480, 'y': 280 - 50, 'phase': random.uniform(0, 6), 'speed': 0.15},
@@ -665,7 +655,6 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         time_sec = frame / FPS
         h_op = ease_out_expo(min(max(time_sec / 0.5, 0.0), 1.0)) if time_sec > 0.0 else 0.0
         
-        # APPLYING CUSTOM DELAYS
         scroll_start = start_delay
         scroll_end = max(scroll_start + 0.5, duration_sec - end_delay)
         
@@ -683,7 +672,6 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         beam_x = int(-400 + (2800 * ((time_sec % 3.0) / 3.0)))
         r_op = ease_out_expo(min(max((time_sec - 0.2) / 0.5, 0.0), 1.0)) if time_sec > 0.2 else 0.0
 
-        # Background Floating Glitters
         if random.random() < 0.5:
             floating_glitters.append({'x': random.randint(150, 1770), 'y': random.randint(350, 1000), 'life': 1.0, 's': random.randint(10, 25)})
         
@@ -695,9 +683,8 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
                 f_glitters.append((g['x'], g['y'], int(g['s'] * pulse), int(255 * max(pulse, 0))))
         floating_glitters = [g for g in floating_glitters if g['life'] > 0]
         
-        # Ribbon Badge Glitters
         b_glitters = []
-        if r_op > 0.5: # Only show stars when ribbon is visible
+        if r_op > 0.5:
             for g in badge_glitters_state:
                 g['phase'] += g['speed']
                 pulse = (math.sin(g['phase']) + 1) / 2
@@ -810,6 +797,7 @@ async def execute_result_pipeline(app, chat_id, target_url):
             out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
             full_heading = prize_headings.get(p_name, p_name)
 
+            # Strict synchronous call
             if engine == "bang":
                 render_bang_video(theme, full_heading, prizes[p_name][0], lottery_title, out_path, duration_sec=dur)
             else:
@@ -906,4 +894,3 @@ start_bot_thread()
 
 st.title("Kerala Lottery Video Engine 🎬")
 st.write("Bot is running. Powered by strict synchronous CV2 writing and ThreadPool Executor.")
-
