@@ -263,10 +263,11 @@ def generate_vertical_gradient(w, h, stops):
         for i in range(len(stops) - 1):
             if stops[i][0] <= t <= stops[i+1][0]:
                 range_t = (t - stops[i][0]) / (stops[i+1][0] - stops[i][0])
-                c = np.array(stops[i][1]) + (np.array(stops[i+1][1]) - np.array(stops[i][1])) * range_t
-                grad[y, :] = [int(c[0]), int(c[1]), int(c[2]), 255]
+                c1, c2 = np.array(stops[i][1]), np.array(stops[i+1][1])
+                c = c1 + (c2 - c1) * range_t
+                gradient[y, :] = [int(c[0]), int(c[1]), int(c[2]), 255]
                 break
-    return Image.fromarray(grad, mode="RGBA")
+    return Image.fromarray(gradient, mode="RGBA")
 
 def pre_render_background(theme="blue"):
     themes = {
@@ -810,9 +811,9 @@ async def execute_result_pipeline(app, chat_id, target_url):
             full_heading = prize_headings.get(p_name, p_name)
 
             if engine == "bang":
-                await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur)
+                render_bang_video(theme, full_heading, prizes[p_name][0], lottery_title, out_path, duration_sec=dur)
             else:
-                await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, start_delay, end_delay)
+                render_scroll_video(theme, full_heading, prizes[p_name], lottery_title, out_path, duration_sec=dur, is_4col=is_4c, start_delay=start_delay, end_delay=end_delay)
             
             video_files.append(out_path)
             await status_msg.edit_text(f"🚀 **Uploading {p_name}...**")
