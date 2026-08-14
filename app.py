@@ -177,11 +177,10 @@ def parse_lottery_result_page(target_url: str):
         h1_tag = soup.find('h1', class_='entry-title')
         raw_title = h1_tag.get_text(strip=True) if h1_tag else "KERALA LOTTERY"
         
-        clean_match = re.search(r'([A-Za-z\s]+[A-Za-z])\s+([A-Z]{2}-\d{3})', raw_title)
-        if clean_match:
-            clean_lottery_title = f"{clean_match.group(1).upper()} ({clean_match.group(2)})"
-        else:
-            clean_lottery_title = re.sub(r'Kerala Lottery Results:|\bOfficial\b|\bResult\b|\bToday\b|\d{2}-\d{2}-\d{4}', '', raw_title, flags=re.IGNORECASE).strip().upper()
+                # --- BLACKLIST KEYWORD CLEANUP ---
+        blacklist_regex = r'(?i)\b(?:KERALA|LOTTERIES|LOTTERY|RESULTS?|TODAY|OFFICIAL|LIVE)\b|\d{2}[/-]\d{2}[/-]\d{4}|:'
+        clean_lottery_title = re.sub(blacklist_regex, '', raw_title)
+        clean_lottery_title = re.sub(r'\s+', ' ', clean_lottery_title).strip().upper()
 
         # Flawless Newline Preservation
         for tag in post_body.find_all(['br', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li', 'table']):
