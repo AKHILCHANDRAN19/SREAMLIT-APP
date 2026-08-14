@@ -124,11 +124,9 @@ def parse_lottery_result_page(target_url: str):
         full_text = post_body.get_text(separator='\n', strip=True)
         lines = [line.strip() for line in full_text.split('\n') if line.strip()]
 
-        # Clean Lottery Title
         h1_tag = soup.find('h1', class_='entry-title')
         raw_title = h1_tag.get_text(strip=True) if h1_tag else "KERALA LOTTERY"
         
-        # Regex to extract something like "KARUNYA PLUS (KN-636)"
         clean_match = re.search(r'([A-Za-z\s]+[A-Za-z])\s+([A-Z]{2}-\d{3})', raw_title)
         if clean_match:
             clean_lottery_title = f"{clean_match.group(1).upper()} ({clean_match.group(2)})"
@@ -156,7 +154,7 @@ def parse_lottery_result_page(target_url: str):
                     prizes_data[current_prize_key] = []
                     h_clean = re.sub(r'\s+', ' ', line).strip()
                     h_clean = re.sub(r'(' + re.escape(matched_header) + r')\s*(Rs\.)', r'\1 - \2', h_clean, flags=re.IGNORECASE)
-                    prize_headings[current_prize_key] = h_clean.upper() # Saved for the Ribbon
+                    prize_headings[current_prize_key] = h_clean.upper() 
                 continue
 
             if current_prize_key:
@@ -167,7 +165,6 @@ def parse_lottery_result_page(target_url: str):
                     four_digits = re.findall(r'\b\d{4}\b', line)
                     if four_digits: prizes_data[current_prize_key].extend(four_digits)
 
-        # 1. Build Telegram Text Message
         msg_output = [f"🎟️ **{clean_lottery_title}**", f"📅 **Date:** `{draw_date}`", f"🔢 **Series:** `{series_str}`", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"]
         prize_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣")]
 
@@ -176,7 +173,6 @@ def parse_lottery_result_page(target_url: str):
                 formatted_val = "  ".join(prizes_data[p_key]) if "Prize" in p_key and "1st" not in p_key and "2nd" not in p_key and "3rd" not in p_key and "Consolation" not in p_key else "\n".join(prizes_data[p_key])
                 msg_output.append(f"{emoji} **{prize_headings.get(p_key, p_key)}**\n`{formatted_val}`\n")
 
-        # 2. Build TTS TXT File Content (RESTORED)
         tts_order = [
             ("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"),
             ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣")
@@ -202,7 +198,6 @@ def parse_lottery_result_page(target_url: str):
 # 2. RAM OPTIMIZED BACKGROUND GENERATOR
 # ==========================================
 def create_and_save_backgrounds():
-    """Generates heavy background arrays ONCE and saves to disk to prevent RAM crash during multiprocessing."""
     print("[LOG] Pre-rendering background themes to disk to save RAM...")
     themes = {
         "purple": (35, 5, 25, 30, 10, 35),
@@ -256,7 +251,6 @@ def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, dur
     bg_asset = Image.open(bg_path).convert("RGBA")
     total_frames = FPS * duration_sec
     
-    # Text Extraction
     ticket_num = item
     district = "KERALA"
     dist_match = re.search(r'\((.*?)\)', item)
@@ -264,7 +258,6 @@ def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, dur
         district = dist_match.group(1).upper()
         ticket_num = item.replace(dist_match.group(0), "").strip()
 
-    # Pre-render Ribbon
     ribbon_asset = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     r_draw = ImageDraw.Draw(ribbon_asset)
     cx, cy, w, h = WIDTH//2, 310, 1040, 130
@@ -308,7 +301,6 @@ def render_bang_video(bg_path, prize_heading, item, lottery_title, out_path, dur
 
     out.release()
     
-    # Instantly compress to save disk space and upload speed
     print(f"[LOG] Compressing {out_path} via FFmpeg...")
     subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p", out_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     os.remove(raw_path)
@@ -324,7 +316,6 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
     rows = math.ceil(len(numbers_list) / cols)
     max_scroll = max(0, rows * (150 if is_4col else 200) - 400)
 
-    # Pre-render Ribbon
     ribbon_asset = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     r_draw = ImageDraw.Draw(ribbon_asset)
     cx, cy, w, h = WIDTH//2, 280, 1040, 120
@@ -359,7 +350,6 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
         elif time_sec >= scroll_end:
             scroll_y_offset = -max_scroll
 
-        # Cards and Stars
         for i, num in enumerate(numbers_list):
             col = i % cols
             row = i // cols
@@ -371,7 +361,6 @@ def render_scroll_video(bg_path, prize_heading, numbers_list, lottery_title, out
                 draw.rounded_rectangle([c_x-cw//2, c_y-ch//2, c_x+cw//2, c_y+ch//2], radius=15, fill=(15, 5, 20, 240), outline=(255, 215, 0, 200), width=3)
                 draw.text((c_x, c_y), num, font=load_font("hero", 80 if is_4col else 95), fill=(255, 250, 240, 255), anchor="mm")
 
-        # Star / Glitter Drawing (RESTORED)
         if random.random() < 0.5:
             glitters.append({'x': random.randint(300, 1620), 'y': random.randint(400, 1000), 'life': 1.0, 's': random.randint(8, 20)})
 
@@ -407,13 +396,11 @@ async def execute_result_pipeline(app, chat_id, message, target_url):
     if not prizes:
         return await msg.edit_text("❌ Scraping failed or no data found.")
 
-    # 1. Send Text
     chunks = [text_msg[i:i+4000] for i in range(0, len(text_msg), 4000)]
     for chunk in chunks:
         await app.send_message(chat_id, chunk)
         await asyncio.sleep(1.0)
         
-    # 2. Send TTS Document (RESTORED)
     if tts_txt and tts_txt.strip():
         print(f"[LOG] Sending TTS Text Document for {draw_date}...")
         tts_file = io.BytesIO(tts_txt.encode('utf-8'))
@@ -425,10 +412,8 @@ async def execute_result_pipeline(app, chat_id, message, target_url):
         )
         await asyncio.sleep(1.0)
 
-    # 3. Render Backgrounds
     bg_paths = create_and_save_backgrounds()
 
-    # 4. Setup Video Jobs
     tier_config = [
         ("1st Prize", "bang", 10, False, "purple"),
         ("2nd Prize", "bang", 10, False, "silver"),
@@ -444,7 +429,6 @@ async def execute_result_pipeline(app, chat_id, message, target_url):
 
     video_files = []
     
-    # Process sequentially in asyncio, but delegate the heavy work to thread executor to keep bot alive
     for p_name, engine, dur, is_4c, theme in tier_config:
         if p_name in prizes and prizes[p_name]:
             await msg.edit_text(f"🎬 **Rendering & Compressing {p_name} ({dur}s)...**\n*(Theme: {theme.upper()})*")
@@ -462,7 +446,6 @@ async def execute_result_pipeline(app, chat_id, message, target_url):
             await msg.edit_text(f"🚀 **Uploading {p_name}...**")
             await app.send_video(chat_id=chat_id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
 
-    # Combine Final
     await msg.edit_text("🗜️ **Combining all videos via FFmpeg...**")
     list_path = os.path.join(DOWNLOAD_DIR, "concat.txt")
     with open(list_path, "w") as f:
@@ -478,42 +461,64 @@ async def execute_result_pipeline(app, chat_id, message, target_url):
         if os.path.exists(f): os.remove(f)
 
 # ==========================================
-# 5. ASYNC PYROFORK BOT
+# 5. ASYNC PYROFORK BOT (WITH FIXES)
 # ==========================================
 async def run_pyrofork_bot():
-    app = Client("lottery_bot", api_id=st.secrets["API_ID"], api_hash=st.secrets["API_HASH"], bot_token=st.secrets["BOT_TOKEN"])
+    try:
+        app = Client(
+            "lottery_bot", 
+            api_id=int(st.secrets["API_ID"]), 
+            api_hash=str(st.secrets["API_HASH"]), 
+            bot_token=str(st.secrets["BOT_TOKEN"]),
+            in_memory=True
+        )
 
-    @app.on_message(filters.command("generate") & filters.private)
-    async def handle_generate(client, message):
-        draws = fetch_last_10_draws()
-        if not draws: return await message.reply_text("❌ Could not retrieve draw list.")
-        await execute_result_pipeline(app, message.chat.id, message, draws[0]['url'])
+        @app.on_message(filters.command("start") & filters.private)
+        async def handle_start(client, message):
+            welcome = (
+                "👋 **Welcome to Kerala Lottery Results & Video Generator Bot!**\n\n"
+                "**Available Commands:**\n"
+                "• `/generate` - Fetch today's result, TTS file & render videos\n"
+                "• `/gencustom` - Select from last 10 draw dates\n"
+                "• `/start` - Show this menu"
+            )
+            await message.reply_text(welcome)
 
-    @app.on_message(filters.command("gencustom") & filters.private)
-    async def handle_gencustom(client, message):
-        msg = await message.reply_text("⏳ **Fetching draw dates...**")
-        draws = fetch_last_10_draws()
-        text_lines = ["📅 **Select a date:**\n"]
-        buttons = []
-        for item in draws:
-            d_str = item['date']
-            buttons.append([InlineKeyboardButton(f"📅 {d_str} | {item['title'][:20]}", callback_data=f"get_{d_str}")])
-        await message.reply_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(buttons))
-        await msg.delete()
+        @app.on_message(filters.command("generate") & filters.private)
+        async def handle_generate(client, message):
+            draws = fetch_last_10_draws()
+            if not draws: return await message.reply_text("❌ Could not retrieve draw list.")
+            await execute_result_pipeline(app, message.chat.id, message, draws[0]['url'])
 
-    @app.on_callback_query(filters.regex(r"^get_(\d{2}-\d{2}-\d{4})"))
-    async def handle_get_callback(client, callback_query):
-        await callback_query.answer()
-        target_date = callback_query.data.replace("get_", "")
-        draws = fetch_last_10_draws()
-        target_url = next((d['url'] for d in draws if d['date'] == target_date), f"https://www.keralalotteries.net/search?q={target_date}")
-        print(f"[LOG] /gencustom triggered for date: {target_date}")
-        await execute_result_pipeline(app, callback_query.message.chat.id, callback_query.message, target_url)
+        @app.on_message(filters.command("gencustom") & filters.private)
+        async def handle_gencustom(client, message):
+            msg = await message.reply_text("⏳ **Fetching draw dates...**")
+            draws = fetch_last_10_draws()
+            text_lines = ["📅 **Select a date:**\n"]
+            buttons = []
+            for item in draws:
+                d_str = item['date']
+                buttons.append([InlineKeyboardButton(f"📅 {d_str} | {item['title'][:20]}", callback_data=f"get_{d_str}")])
+            await message.reply_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(buttons))
+            await msg.delete()
 
-    await app.start()
-    print("[LOG] Bot Started Successfully.")
-    try: await asyncio.Event().wait()
-    finally: await app.stop()
+        @app.on_callback_query(filters.regex(r"^get_(\d{2}-\d{2}-\d{4})"))
+        async def handle_get_callback(client, callback_query):
+            await callback_query.answer()
+            target_date = callback_query.data.replace("get_", "")
+            draws = fetch_last_10_draws()
+            target_url = next((d['url'] for d in draws if d['date'] == target_date), f"https://www.keralalotteries.net/search?q={target_date}")
+            print(f"[LOG] /gencustom triggered for date: {target_date}")
+            await execute_result_pipeline(app, callback_query.message.chat.id, callback_query.message, target_url)
+
+        await app.start()
+        print("[LOG] Bot Started Successfully.")
+        await asyncio.Event().wait()
+    except Exception as e:
+        print(f"[CRITICAL ERROR] Bot thread crashed: {e}")
+    finally:
+        if 'app' in locals() and app.is_initialized:
+            await app.stop()
 
 # ==========================================
 # 6. STREAMLIT THREADING
@@ -521,9 +526,12 @@ async def run_pyrofork_bot():
 @st.cache_resource
 def start_bot_thread():
     def run_async_loop():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(run_pyrofork_bot())
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(run_pyrofork_bot())
+        except Exception as e:
+            print(f"[CRITICAL ERROR] Async loop crashed: {e}")
     threading.Thread(target=run_async_loop, daemon=True).start()
 
 start_bot_thread()
