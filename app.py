@@ -891,7 +891,7 @@ async def run_pyrofork_bot():
             draw_date = callback_query.matches[0].group(1)
             tier_names = [
                 "1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "4th Prize", 
-                "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize", "10th Prize"
+                "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"
             ]
             
             buttons = []
@@ -928,8 +928,7 @@ async def run_pyrofork_bot():
                 ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_START_DELAY, PRIZE_6TH_END_DELAY),
                 ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
                 ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
-                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
-                ("10th Prize", "scroll", DURATION_10TH_PRIZE, True, "blue", PRIZE_10TH_START_DELAY, PRIZE_10TH_END_DELAY)
+                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY)
             ]
             
             video_files = []
