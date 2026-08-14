@@ -941,7 +941,7 @@ async def run_pyrofork_bot():
             
             await callback_query.message.delete()
             
-                        for p_name, engine, dur, is_4c, theme, start_delay, end_delay in tiers_to_render:
+            for p_name, engine, dur, is_4c, theme, start_delay, end_delay in tiers_to_render:
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
                     status_msg = await client.send_message(callback_query.message.chat.id, f"🎬 **Rendering {p_name}...**")
                     out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
