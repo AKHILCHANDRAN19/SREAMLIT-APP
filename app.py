@@ -18,6 +18,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
+#
 # ==========================================
 # --- USER CONFIGURATION BLOCK ---
 # ==========================================
