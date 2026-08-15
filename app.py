@@ -15,7 +15,7 @@ import concurrent.futures
 from datetime import datetime
 from bs4 import BeautifulSoup
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 import intro
 
@@ -35,11 +35,8 @@ DURATION_6TH_PRIZE = 25
 DURATION_7TH_PRIZE = 90
 DURATION_8TH_PRIZE = 90
 DURATION_9TH_PRIZE = 90
-DURATION_10TH_PRIZE = 90
 
 # 2. SCROLL SPEED SETTINGS (START AND END DELAYS)
-# Lowering total duration + keeping delays the same = FASTER scrolling.
-
 CONSOLATION_START_DELAY = 2.0
 CONSOLATION_END_DELAY = 2.0
 
@@ -54,9 +51,6 @@ PRIZE_6TH_END_DELAY = 2.0
 
 PRIZE_7_8_9_START_DELAY = 2.0
 PRIZE_7_8_9_END_DELAY = 2.0
-
-PRIZE_10TH_START_DELAY = 2.0
-PRIZE_10TH_END_DELAY = 2.0
 
 # ==========================================
 
@@ -198,7 +192,7 @@ def parse_lottery_result_page(target_url: str):
         series_match = re.search(r'Today Lottery Series:\s*([A-Z0-9,\s]+)', full_text)
         series_str = series_match.group(1).strip() if series_match else "N/A"
 
-        prize_headers = ["1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize", "10th Prize"]
+        prize_headers = ["1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]
         prizes_data = {}
         prize_headings = {}
         current_prize_key = None
@@ -223,19 +217,41 @@ def parse_lottery_result_page(target_url: str):
                     if four_digits: prizes_data[current_prize_key].extend(four_digits)
 
         msg_output = [f"🎟️ **{clean_lottery_title}**", f"📅 **Date:** `{draw_date}`", f"🔢 **Series:** `{series_str}`", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"]
-        prize_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣"), ("10th Prize", "🔟")]
+        prize_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣")]
 
         for p_key, emoji in prize_order:
             if p_key in prizes_data and prizes_data[p_key]:
                 formatted_val = "  ".join(prizes_data[p_key]) if "Prize" in p_key and "1st" not in p_key and "2nd" not in p_key and "3rd" not in p_key and "Consolation" not in p_key else "\n".join(prizes_data[p_key])
                 msg_output.append(f"{emoji} **{prize_headings.get(p_key, p_key)}**\n`{formatted_val}`\n")
 
-        tts_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣")]
-        tts_output = []
+        # --- TTS GENERATION BLOCK ---
+        static_intro = "നമസ്കാരം, കേരള സംസ്ഥാന ഭാഗ്യക്കുറി വകുപ്പിന്റെ ഇന്നത്തെ നറുക്കെടുപ്പ് ഫലങ്ങളിലേക്ക് ഏവർക്കും സ്വാഗതം. നിങ്ങൾക്ക് ഈ വീഡിയോ ഇഷ്ടമായെങ്കിൽ ലൈക് ചെയ്യാനും, ഷെയർ ചെയ്യാനും, ചാനൽ സബ്സ്ക്രൈബ് ചെയ്യാനും മറക്കരുതേ. ലോട്ടറി ഫലങ്ങൾ പ്രസിദ്ധീകരിക്കുമ്പോൾ തന്നെ വേഗത്തിൽ അറിയാനും വിശദമായ വിവരങ്ങൾക്കുമായി, ഡിസ്ക്രിപ്ഷനിലും എബൗട്ട് സെക്ഷനിലും നൽകിയിട്ടുള്ള ലിങ്ക് വഴി ഞങ്ങളുടെ വാട്സ്ആപ്പ് ചാനലിൽ ജോയിൻ ചെയ്യുക."
+        
+        ml_years = {"2024": "രണ്ടായിരത്തി ഇരുപത്തിനാല്", "2025": "രണ്ടായിരത്തി ഇരുപത്തഞ്ച്", "2026": "രണ്ടായിരത്തി ഇരുപത്തിയാറ്", "2027": "രണ്ടായിരത്തി ഇരുപത്തിയേഴ്"}
+        ml_months = {1: "ജനുവരി", 2: "ഫെബ്രുവരി", 3: "മാർച്ച്", 4: "ഏപ്രിൽ", 5: "മെയ്", 6: "ജൂൺ", 7: "ജൂലൈ", 8: "ആഗസ്റ്റ്", 9: "സെപ്റ്റംബർ", 10: "ഒക്ടോബർ", 11: "നവംബർ", 12: "ഡിസംബർ"}
+        ml_days = {1: "ഒന്നാം", 2: "രണ്ടാം", 3: "മൂന്നാം", 4: "നാലാം", 5: "അഞ്ചാം", 6: "ആറാം", 7: "ഏഴാം", 8: "എട്ടാം", 9: "ഒമ്പതാം", 10: "പത്താം", 11: "പതിനൊന്നാം", 12: "പന്ത്രണ്ടാം", 13: "പതിമൂന്നാം", 14: "പതിനാലാം", 15: "പതിനഞ്ചാം", 16: "പതിനാറാം", 17: "പതിനേഴാം", 18: "പതിനെട്ടാം", 19: "പത്തൊമ്പതാം", 20: "ഇരുപതാം", 21: "ഇരുപത്തിയൊന്നാം", 22: "ഇരുപത്തിരണ്ടാം", 23: "ഇരുപത്തിമൂന്നാം", 24: "ഇരുപത്തിനാലാം", 25: "ഇരുപത്തഞ്ചാം", 26: "ഇരുപത്തിയാറാം", 27: "ഇരുപത്തിയേഴാം", 28: "ഇരുപത്തിയെട്ടാം", 29: "ഇരുപത്തിയൊമ്പതാം", 30: "മുപ്പതാം", 31: "മുപ്പത്തിയൊന്നാം"}
+        ml_weekdays = {0: "തിങ്കളാഴ്ച", 1: "ചൊവ്വാഴ്ച", 2: "ബുധനാഴ്ച", 3: "വ്യാഴാഴ്ച", 4: "വെള്ളിയാഴ്ച", 5: "ശനിയാഴ്ച", 6: "ഞായറാഴ്ച"}
+        
+        try:
+            d = datetime.strptime(draw_date, "%d-%m-%Y")
+            y_sp = ml_years.get(str(d.year), str(d.year))
+            m_sp = ml_months.get(d.month, "")
+            d_sp = ml_days.get(d.day, "")
+            w_sp = ml_weekdays.get(d.weekday(), "")
+            dynamic_intro = f"ഇന്ന് {y_sp} {m_sp} മാസം {d_sp} തീയതി {w_sp} നടന്ന {clean_lottery_title} ലോട്ടറിയുടെ ഔദ്യോഗിക ഫലങ്ങളാണ് ഇപ്പോൾ പ്രഖ്യാപിക്കുന്നത്."
+        except Exception:
+            dynamic_intro = f"ഇന്ന് നടന്ന {clean_lottery_title} ലോട്ടറിയുടെ ഔദ്യോഗിക ഫലങ്ങളാണ് ഇപ്പോൾ പ്രഖ്യാപിക്കുന്നത്."
+
+        tts_output = [static_intro, "", dynamic_intro, ""]
+
+        # Only read specific prizes (Skips 4th, 7th, 8th, and 9th)
+        tts_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣")]
+        
         for p_key, emoji in tts_order:
             if p_key in prizes_data and prizes_data[p_key]:
                 tts_output.append(f"{emoji} {prize_headings.get(p_key, p_key)}")
-                for item in prizes_data[p_key]: tts_output.append(to_tts_format(item))
+                for item in prizes_data[p_key]: 
+                    tts_output.append(to_tts_format(item))
                 tts_output.append("")
         
         return "\n".join(msg_output), "\n".join(tts_output), draw_date, prizes_data, prize_headings, clean_lottery_title
@@ -835,6 +851,7 @@ async def execute_result_pipeline(app, chat_id, target_url):
     ])
     await app.send_message(chat_id, "🎬 **Do you want to generate the videos?**", reply_markup=keyboard)
 
+
 from pyrogram.types import ForceReply
 USER_VIDEOS = {}
 
@@ -858,6 +875,7 @@ async def run_pyrofork_bot():
                 "**Available Commands:**\n"
                 "• `/generate` - Fetch today's result & render pipeline\n"
                 "• `/gencustom` - Select from last 10 draw dates\n"
+                "• `/combine` - Stitch uploaded videos together\n"
                 "• `/start` - Show this menu"
             )
             await message.reply_text(welcome)
@@ -899,7 +917,6 @@ async def run_pyrofork_bot():
                 "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"
             ]
 
-            
             buttons = []
             for i, name in enumerate(tier_names):
                 buttons.append([
@@ -907,7 +924,6 @@ async def run_pyrofork_bot():
                     InlineKeyboardButton(f"⏭️ Up to {name}", callback_data=f"ru_{i}_{draw_date}")
                 ])
             
-            # --- NEW: ADD CUSTOM RANGE BUTTON ---
             buttons.append([InlineKeyboardButton("🔀 Custom Range", callback_data=f"rr_{draw_date}")])
             
             await callback_query.message.edit_text("🎛️ **Select Video Generation Mode:**", reply_markup=InlineKeyboardMarkup(buttons))
@@ -942,7 +958,6 @@ async def run_pyrofork_bot():
                 ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY)
             ]
 
-            
             video_files = []
             tiers_to_render = [tier_config[tier_idx]] if action == "rs" else tier_config[:tier_idx + 1]
             
@@ -982,6 +997,121 @@ async def run_pyrofork_bot():
                 if os.path.exists(FINAL_OUTPUT_VIDEO): os.remove(FINAL_OUTPUT_VIDEO)
             
             print("**[LOG]** Process Complete.", flush=True)
+
+        # ==========================================
+        # NEW FEATURE: CUSTOM RANGE GENERATOR
+        # ==========================================
+        @app.on_callback_query(filters.regex(r"^rr_(.*)"))
+        async def handle_range_request(client, callback_query):
+            draw_date = callback_query.matches[0].group(1)
+            await callback_query.message.delete()
+            await client.send_message(
+                callback_query.message.chat.id,
+                f"🔀 **Custom Range for {draw_date}**\n\nReply to this message with your range.\nUse `i` for Intro, `c` for Consolation, and `1-9` for prizes.\n\nExamples:\n`7-9` (7th to 9th)\n`i-2` (Intro to 2nd)\n`c-5` (Consolation to 5th)",
+                reply_markup=ForceReply(selective=True)
+            )
+
+        @app.on_message(filters.reply & filters.private)
+        async def handle_range_reply(client, message):
+            if not message.reply_to_message.text or "Custom Range for" not in message.reply_to_message.text:
+                return
+
+            draw_date = re.search(r"for (\d{2}-\d{2}-\d{4})", message.reply_to_message.text).group(1)
+            text = message.text.lower().replace(" ", "")
+
+            if "-" not in text:
+                return await message.reply_text("❌ Invalid format. Please use a hyphen, e.g., `7-9` or `i-2`")
+
+            start_str, end_str = text.split("-")[0], text.split("-")[1]
+            idx_map = {'i': 0, '1': 1, 'c': 2, '2': 3, '3': 4, '4': 5, '5': 6, '6': 7, '7': 8, '8': 9, '9': 10}
+
+            if start_str not in idx_map or end_str not in idx_map:
+                return await message.reply_text("❌ Invalid keys. Use i, c, or numbers 1-9.")
+
+            start_idx, end_idx = idx_map[start_str], idx_map[end_str]
+            if start_idx > end_idx:
+                return await message.reply_text("❌ Start tier must be before end tier.")
+
+            await message.reply_text("🔎 **Fetching data for custom range rendering...**")
+            
+            draws = fetch_last_10_draws()
+            target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
+            _, _, _, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+            
+            tier_config = [
+                ("Intro", "intro", 0, False, "none", 0, 0),
+                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0, 0),
+                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_START_DELAY, CONSOLATION_END_DELAY),
+                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0, 0),
+                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0, 0),
+                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_START_DELAY, PRIZE_4TH_END_DELAY),
+                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_START_DELAY, PRIZE_5TH_END_DELAY),
+                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_START_DELAY, PRIZE_6TH_END_DELAY),
+                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
+                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
+                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY)
+            ]
+
+            video_files = []
+            tiers_to_render = tier_config[start_idx : end_idx + 1]
+
+            for p_name, engine, dur, is_4c, theme, start_delay, end_delay in tiers_to_render:
+                if engine == "intro" or (p_name in prizes and prizes[p_name]):
+                    status_msg = await client.send_message(message.chat.id, f"🎬 **Rendering {p_name}...**")
+                    out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
+                    
+                    if engine == "intro":
+                        await asyncio.to_thread(intro.generate_video, out_path)
+                    else:
+                        full_heading = prize_headings.get(p_name, p_name)
+                        if engine == "bang":
+                            await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur)
+                        else:
+                            await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, start_delay, end_delay)
+                    
+                    video_files.append(out_path)
+                    await status_msg.delete()
+
+            if len(video_files) > 0:
+                status_msg = await client.send_message(message.chat.id, "🗜️ **Combining custom range...**")
+                await asyncio.to_thread(compress_and_combine, video_files, FINAL_OUTPUT_VIDEO)
+                await status_msg.edit_text("🚀 **Uploading combined sequence...**")
+                await client.send_video(chat_id=message.chat.id, video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Custom Range**\n📅 `{draw_date}`")
+                await status_msg.delete()
+                if os.path.exists(FINAL_OUTPUT_VIDEO): os.remove(FINAL_OUTPUT_VIDEO)
+
+        # ==========================================
+        # NEW FEATURE: MANUAL VIDEO COMBINER
+        # ==========================================
+        @app.on_message(filters.video & filters.private)
+        async def handle_video_receive(client, message):
+            chat_id = message.chat.id
+            if chat_id not in USER_VIDEOS:
+                USER_VIDEOS[chat_id] = []
+            
+            msg = await message.reply_text("⬇️ Downloading video piece...")
+            file_path = os.path.join(DOWNLOAD_DIR, f"manual_{chat_id}_{len(USER_VIDEOS[chat_id])}.mp4")
+            await message.download(file_name=file_path)
+            USER_VIDEOS[chat_id].append(file_path)
+            await msg.edit_text(f"✅ **Video #{len(USER_VIDEOS[chat_id])} saved!**\nSend the next piece, or type `/combine` to stitch them together.")
+
+        @app.on_message(filters.command("combine") & filters.private)
+        async def handle_combine(client, message):
+            chat_id = message.chat.id
+            if chat_id not in USER_VIDEOS or len(USER_VIDEOS[chat_id]) == 0:
+                return await message.reply_text("❌ You need to send me some video files first!")
+
+            status = await message.reply_text("🗜️ **Combining your sent videos seamlessly...**")
+            out_path = os.path.join(DOWNLOAD_DIR, f"manual_combined_{chat_id}.mp4")
+            
+            await asyncio.to_thread(compress_and_combine, USER_VIDEOS[chat_id], out_path)
+
+            await status.edit_text("🚀 **Uploading combined masterpiece...**")
+            await client.send_video(chat_id, out_path)
+            await status.delete()
+
+            if os.path.exists(out_path): os.remove(out_path)
+            USER_VIDEOS[chat_id] = []
 
         await app.start()
         print("**[LOG]** Bot Started Successfully.", flush=True)
