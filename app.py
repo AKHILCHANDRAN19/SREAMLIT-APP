@@ -906,8 +906,12 @@ async def run_pyrofork_bot():
                     InlineKeyboardButton(f"🎥 {name} Only", callback_data=f"rs_{i}_{draw_date}"),
                     InlineKeyboardButton(f"⏭️ Up to {name}", callback_data=f"ru_{i}_{draw_date}")
                 ])
-                
+            
+            # --- NEW: ADD CUSTOM RANGE BUTTON ---
+            buttons.append([InlineKeyboardButton("🔀 Custom Range", callback_data=f"rr_{draw_date}")])
+            
             await callback_query.message.edit_text("🎛️ **Select Video Generation Mode:**", reply_markup=InlineKeyboardMarkup(buttons))
+
 
         @app.on_callback_query(filters.regex(r"^(rs|ru)_(\d+)_(.*)"))
         async def handle_render_action(client, callback_query):
