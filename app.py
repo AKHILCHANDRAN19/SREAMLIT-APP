@@ -835,6 +835,9 @@ async def execute_result_pipeline(app, chat_id, target_url):
     ])
     await app.send_message(chat_id, "🎬 **Do you want to generate the videos?**", reply_markup=keyboard)
 
+from pyrogram.types import ForceReply
+USER_VIDEOS = {}
+
 # ==========================================
 # 6. ASYNC PYROFORK BOT
 # ==========================================
