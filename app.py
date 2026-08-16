@@ -41,20 +41,22 @@ TARGET_CHANNEL_ID = -1003889675767
 
 UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE = False
 
-# 1. BASE VIDEO ANIMATION DURATIONS (IN SECONDS)
-# Note: Scrolling animation starts strictly AFTER the voiceover completes.
-DURATION_1ST_PRIZE = 10
-DURATION_CONSOLATION = 16
-DURATION_2ND_PRIZE = 10
-DURATION_3RD_PRIZE = 10
-DURATION_4TH_PRIZE = 25
-DURATION_5TH_PRIZE = 25
-DURATION_6TH_PRIZE = 25
-DURATION_7TH_PRIZE = 80   # 1.33 minutes scroll
-DURATION_8TH_PRIZE = 80   # 1.33 minutes scroll
-DURATION_9TH_PRIZE = 80   # 1.33 minutes scroll
+# 1. BASE ANIMATION / SCROLLING DURATIONS (IN SECONDS - EXCLUDING VOICEOVER)
+# Note: Scrolling begins strictly AFTER voiceover completes.
+# Total duration = Voiceover Audio Duration + BASE_DURATION
+DURATION_1ST_PRIZE = 2.5         # Extra holding time after numbers are read
+DURATION_2ND_PRIZE = 2.5         # Extra holding time after numbers are read
+DURATION_3RD_PRIZE = 2.5         # Extra holding time after numbers are read
 
-# 2. SCROLL SPEED SETTINGS (END DELAYS)
+DURATION_CONSOLATION = 16.0      # 16 seconds scroll after header
+DURATION_4TH_PRIZE = 25.0        # 25 seconds scroll after header
+DURATION_5TH_PRIZE = 25.0        # 25 seconds scroll after header/numbers
+DURATION_6TH_PRIZE = 25.0        # 25 seconds scroll after header
+DURATION_7TH_PRIZE = 90.0        # 1.30 minutes (90 seconds) scroll after header
+DURATION_8TH_PRIZE = 90.0        # 1.30 minutes (90 seconds) scroll after header
+DURATION_9TH_PRIZE = 90.0        # 1.30 minutes (90 seconds) scroll after header
+
+# 2. SCROLL SPEED SETTINGS (END DELAYS IN SECONDS)
 CONSOLATION_END_DELAY = 2.0
 PRIZE_4TH_END_DELAY = 2.0
 PRIZE_5TH_END_DELAY = 2.0
@@ -205,7 +207,7 @@ def generate_cinematic_bang(file_path):
         wf.setframerate(sample_rate)
         wf.writeframes(pcm.tobytes())
 
-def generate_calm_bgm(file_path, duration=150.0):
+def generate_calm_bgm(file_path, duration=180.0):
     if os.path.exists(file_path): return
     GLOBAL_STATE.log(f"Synthesizing Calm Scroll Ambient Pad to {file_path}...")
     sample_rate = 44100
@@ -348,7 +350,6 @@ def to_tts_format(ticket_str: str) -> str:
         return ticket_clean
 
 def get_malayalam_prize_money(amount_str):
-    # Strip brackets, parentheses, and letters to eliminate unwanted appended numbers
     clean_str = re.sub(r'\[.*?\]|\(.*?\)', '', str(amount_str))
     clean_num = re.sub(r'[^\d]', '', clean_str)
     if not clean_num: return ""
@@ -460,10 +461,8 @@ def fetch_last_10_draws():
         res = http_get(base_url)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # Target specific result links directly by URL pattern
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href']
-            # Match standard lottery result URL format: /YYYY/MM/lottery-name-date.html
             if re.search(r'/\d{4}/\d{2}/.*lottery.*\.html', href) and 'today-kerala-lottery-result-live' not in href:
                 date_match = re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', href) or \
                              re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', a_tag.get_text())
@@ -473,7 +472,6 @@ def fetch_last_10_draws():
                     raw_title = re.sub(r'(?i)\b(?:official result|results? today|live|kerala lottery|results?)\b', '', raw_title)
                     raw_title = re.sub(r'\s+', ' ', raw_title).strip()
                     
-                    # Find if date is already in list
                     existing = next((d for d in draws if d['date'] == d_str), None)
                     if not existing:
                         draws.append({'date': d_str, 'title': raw_title or d_str, 'url': href})
@@ -515,11 +513,9 @@ def parse_lottery_result_page(target_url: str):
         for tag in post_body.find_all(['br', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li', 'table']):
             tag.insert_after('\n')
         
-        # Replace all non-breaking spaces before line processing
         full_text = post_body.get_text(separator=' ').replace('\xa0', ' ')
         lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
 
-        # Universal multi-source Date Extraction (checks Target URL, H1 Title, and Post Body)
         date_match = re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', target_url) or \
                      re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', raw_title) or \
                      re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', full_text)
@@ -529,7 +525,6 @@ def parse_lottery_result_page(target_url: str):
         else:
             draw_date = "N/A"
 
-        # Native Malayalam Series Name Extraction
         malayalam_name_series = clean_lottery_title
         for i, line in enumerate(lines):
             if 'തത്സമയ നറുക്കെടുപ്പ്' in line and 'റിസൾട്ട്' in line:
@@ -575,7 +570,6 @@ def parse_lottery_result_page(target_url: str):
             if current_prize_key:
                 if (line.startswith("(") and line.endswith(")")) or line in ["...", "---"]: continue
                 
-                # Capture 1st, 2nd, and 3rd Prize winning tickets with districts
                 if current_prize_key in ["1st Prize", "2nd Prize", "3rd Prize"]:
                     ticket_match = re.search(r'([A-Za-z]{2}\s*\d{6}(?:\s*\([A-Za-z\s]+\))?)', line)
                     if ticket_match:
@@ -585,7 +579,6 @@ def parse_lottery_result_page(target_url: str):
                     if cons_tickets:
                         prizes_data[current_prize_key].extend(cons_tickets)
                 else:
-                    # 4th through 9th Prizes: 4-digit numbers
                     four_digits = re.findall(r'\b\d{4}\b', line)
                     if four_digits:
                         prizes_data[current_prize_key].extend(four_digits)
@@ -619,7 +612,6 @@ def parse_lottery_result_page(target_url: str):
             "6th Prize": "ആറാം", "7th Prize": "ഏഴാം", "8th Prize": "എട്ടാം", "9th Prize": "ഒമ്പതാം"
         }
         
-        # Read numbers only for 1st, 2nd, 3rd, and 5th Prizes (Consolation reads only money header)
         two_step_prizes = ["1st Prize", "2nd Prize", "3rd Prize", "5th Prize"]
         tts_file_blocks = [f"[Intro Header]\n{dynamic_intro}"]
 
@@ -891,7 +883,7 @@ async def broadcast_to_channel(client, text=None, video_path=None, audio_path=No
     if not TARGET_CHANNEL_ID: return
     try:
         if text:
-            chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            chunks = [text[i:i+3800] for i in range(0, len(text), 3800)]
             for chunk in chunks:
                 await client.send_message(TARGET_CHANNEL_ID, chunk)
                 await asyncio.sleep(0.4)
@@ -903,6 +895,33 @@ async def broadcast_to_channel(client, text=None, video_path=None, audio_path=No
             await client.send_document(TARGET_CHANNEL_ID, document=document, caption=caption)
     except Exception as e:
         GLOBAL_STATE.log(f"Channel Broadcast Error: {e}")
+
+async def send_yt_metadata_package(client, chat_id, title_1, title_2, yt_desc, yt_tags):
+    # 1. Send Titles (Copyable)
+    t_msg = f"🏷️ **YOUTUBE TITLE (OPTION 1):**\n`{title_1}`\n\n🏷️ **YOUTUBE TITLE (OPTION 2):**\n`{title_2}`"
+    await client.send_message(chat_id, t_msg)
+    if chat_id != TARGET_CHANNEL_ID:
+        await broadcast_to_channel(client, text=t_msg)
+    await asyncio.sleep(0.4)
+
+    # 2. Send Description & Timestamps in auto-chunks to prevent MessageTooLong
+    desc_chunks = [yt_desc[i:i+3500] for i in range(0, len(yt_desc), 3500)]
+    for idx, chunk in enumerate(desc_chunks):
+        header = f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (PART {idx+1}/{len(desc_chunks)} - TAP TO COPY):**\n" if len(desc_chunks) > 1 else "📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (TAP TO COPY):**\n"
+        d_msg = f"{header}```{chunk}```"
+        await client.send_message(chat_id, d_msg)
+        if chat_id != TARGET_CHANNEL_ID:
+            await broadcast_to_channel(client, text=d_msg)
+        await asyncio.sleep(0.4)
+
+    # 3. Send Tags (Copyable)
+    tag_chunks = [yt_tags[i:i+3500] for i in range(0, len(yt_tags), 3500)]
+    for chunk in tag_chunks:
+        g_msg = f"🏷️ **YOUTUBE TAGS (TAP TO COPY):**\n`{chunk}`"
+        await client.send_message(chat_id, g_msg)
+        if chat_id != TARGET_CHANNEL_ID:
+            await broadcast_to_channel(client, text=g_msg)
+        await asyncio.sleep(0.4)
 
 # ==========================================
 # 3. UTILITIES & BACKGROUND PRE-RENDERER
@@ -1090,8 +1109,8 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     audio_file = out_path.replace(".mp4", ".wav")
     audio_dur = get_audio_duration(audio_file)
     
-    # 1st, 2nd, 3rd Prize Duration: Audio Duration + 2.0s
-    calc_dur = max(audio_dur + 2.0 if audio_dur > 0 else base_dur, 6.0)
+    # 1st, 2nd, 3rd Prize Duration: Voiceover Audio Duration + base_dur
+    calc_dur = max(audio_dur + base_dur if audio_dur > 0 else 10.0, 6.0)
     total_frames = int(FPS * calc_dur)
     
     impact_time = impact_time_override if (impact_time_override and impact_time_override > 0) else (1.0 if audio_dur == 0 else min(2.5, audio_dur * 0.4))
@@ -1381,7 +1400,7 @@ async def execute_result_pipeline(app, chat_id, target_url):
         return await msg.edit_text("❌ Scraping failed or no data found. Results may not be fully published.")
 
     await msg.delete()
-    chunks = [text_msg[i:i+4000] for i in range(0, len(text_msg), 4000)]
+    chunks = [text_msg[i:i+3800] for i in range(0, len(text_msg), 3800)]
     for chunk in chunks:
         await app.send_message(chat_id, chunk)
         await asyncio.sleep(0.4)
@@ -1613,24 +1632,7 @@ async def run_pyrofork_bot():
 
             # Generate and Send 1-Tap Copyable YouTube Metadata Package
             title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map)
-            
-            await client.send_message(
-                callback_query.message.chat.id,
-                f"🏷️ **YOUTUBE TITLE (OPTION 1):**\n`{title_1}`\n\n🏷️ **YOUTUBE TITLE (OPTION 2):**\n`{title_2}`"
-            )
-            await client.send_message(
-                callback_query.message.chat.id,
-                f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (TAP TO COPY):**\n```{yt_desc}```"
-            )
-            await client.send_message(
-                callback_query.message.chat.id,
-                f"🏷️ **YOUTUBE TAGS (TAP TO COPY):**\n`{yt_tags}`"
-            )
-            
-            # Broadcast same formatted package to Channel
-            await broadcast_to_channel(client, text=f"🏷️ **YOUTUBE TITLE (OPTION 1):**\n`{title_1}`\n\n🏷️ **YOUTUBE TITLE (OPTION 2):**\n`{title_2}`")
-            await broadcast_to_channel(client, text=f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (TAP TO COPY):**\n```{yt_desc}```")
-            await broadcast_to_channel(client, text=f"🏷️ **YOUTUBE TAGS (TAP TO COPY):**\n`{yt_tags}`")
+            await send_yt_metadata_package(client, callback_query.message.chat.id, title_1, title_2, yt_desc, yt_tags)
 
             if action == "ru" and len(video_files) > 1:
                 GLOBAL_STATE.set_status("Final Stitching", 0.95, f"Combining {len(video_files)} video segments...")
@@ -1707,24 +1709,7 @@ async def run_pyrofork_bot():
 
             # Generate and Send 1-Tap Copyable YouTube Metadata Package
             title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map)
-            
-            await client.send_message(
-                message.chat.id,
-                f"🏷️ **YOUTUBE TITLE (OPTION 1):**\n`{title_1}`\n\n🏷️ **YOUTUBE TITLE (OPTION 2):**\n`{title_2}`"
-            )
-            await client.send_message(
-                message.chat.id,
-                f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (TAP TO COPY):**\n```{yt_desc}```"
-            )
-            await client.send_message(
-                message.chat.id,
-                f"🏷️ **YOUTUBE TAGS (TAP TO COPY):**\n`{yt_tags}`"
-            )
-
-            # Broadcast to Channel
-            await broadcast_to_channel(client, text=f"🏷️ **YOUTUBE TITLE (OPTION 1):**\n`{title_1}`\n\n🏷️ **YOUTUBE TITLE (OPTION 2):**\n`{title_2}`")
-            await broadcast_to_channel(client, text=f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (TAP TO COPY):**\n```{yt_desc}```")
-            await broadcast_to_channel(client, text=f"🏷️ **YOUTUBE TAGS (TAP TO COPY):**\n`{yt_tags}`")
+            await send_yt_metadata_package(client, message.chat.id, title_1, title_2, yt_desc, yt_tags)
 
             if len(video_files) > 1:
                 status_msg = await client.send_message(message.chat.id, "🗜️ **Combining custom range...**")
