@@ -23,6 +23,7 @@ import websockets
 import requests
 import json
 import base64
+import uuid
 import wave
 
 try:
@@ -51,12 +52,20 @@ DURATION_7TH_PRIZE = 90
 DURATION_8TH_PRIZE = 90
 DURATION_9TH_PRIZE = 90
 
-# 2. SCROLL SPEED SETTINGS (END DELAYS)
-# Start delays are now dynamically controlled by audio duration.
+# 2. SCROLL SPEED SETTINGS (START AND END DELAYS)
+CONSOLATION_START_DELAY = 2.0
 CONSOLATION_END_DELAY = 2.0
+
+PRIZE_4TH_START_DELAY = 2.0
 PRIZE_4TH_END_DELAY = 2.0
+
+PRIZE_5TH_START_DELAY = 2.0
 PRIZE_5TH_END_DELAY = 2.0
+
+PRIZE_6TH_START_DELAY = 2.0
 PRIZE_6TH_END_DELAY = 2.0
+
+PRIZE_7_8_9_START_DELAY = 2.0
 PRIZE_7_8_9_END_DELAY = 2.0
 
 # ==========================================
@@ -105,7 +114,6 @@ def get_audio_duration(audio_path):
 # PYTHON AUDIO SYNTHESIZERS
 # ==========================================
 def generate_cinematic_bang(file_path):
-    """Synthesizes the Hollywood Cinematic Trailer Bang provided by the user."""
     if os.path.exists(file_path): return
     print(f"**[LOG]** Synthesizing Cinematic Bang Audio to {file_path}...", flush=True)
     sample_rate = 44100
@@ -156,14 +164,13 @@ def generate_cinematic_bang(file_path):
         wf.writeframes(pcm.tobytes())
 
 def generate_calm_bgm(file_path, duration=90.0):
-    """Synthesizes an ambient, lush atmospheric pad for the scroll videos."""
     if os.path.exists(file_path): return
     print(f"**[LOG]** Synthesizing Calm Scroll Ambient Pad to {file_path}...", flush=True)
     sample_rate = 44100
     total_samples = int(sample_rate * duration)
     
     pcm = array.array('h')
-    freqs = [110.0, 164.81, 220.0, 246.94, 329.63] # A2, E3, A3, B3, E4 chord
+    freqs = [110.0, 164.81, 220.0, 246.94, 329.63] 
     chunk_size = 44100
     
     for chunk_start in range(0, total_samples, chunk_size):
@@ -195,7 +202,6 @@ def generate_calm_bgm(file_path, duration=90.0):
         wf.setframerate(sample_rate)
         wf.writeframes(pcm.tobytes())
 
-# Generate Audio if Missing
 generate_cinematic_bang(BANG_AUDIO_BGM)
 generate_calm_bgm(SCROLL_AUDIO_BGM)
 
@@ -343,9 +349,8 @@ def parse_lottery_result_page(target_url: str):
         soup = BeautifulSoup(res.text, 'html.parser')
         post_body = soup.find('div', id=re.compile(r'post-body-'))
         if not post_body:
-            return "❌ Could not parse body.", None, None, {}, {}, None, {}
+            return "❌ Could not parse body.", None, {}, None, {}, {}, None
 
-        # Native Malayalam Extraction Hook
         malayalam_name_series = ""
         live_draw_tag = soup.find(lambda t: t.name in ['b', 'strong', 'span'] and 'തത്സമയ നറുക്കെടുപ്പ്' in t.text)
         if live_draw_tag:
@@ -438,7 +443,9 @@ def parse_lottery_result_page(target_url: str):
         except:
             dynamic_intro = f"ഇന്ന് നടന്ന {malayalam_name_series} ലോട്ടറിയുടെ ഔദ്യോഗിക ഫലങ്ങളാണ് ഇപ്പോൾ പ്രഖ്യാപിക്കുന്നത്."
 
-        tts_output["Intro"] = dynamic_intro
+        static_intro = "നമസ്കാരം, കേരള സംസ്ഥാന ഭാഗ്യക്കുറി വകുപ്പിന്റെ ഇന്നത്തെ നറുക്കെടുപ്പ് ഫലങ്ങളിലേക്ക് ഏവർക്കും സ്വാഗതം. നിങ്ങൾക്ക് ഈ വീഡിയോ ഇഷ്ടമായെങ്കിൽ ലൈക് ചെയ്യാനും, ഷെയർ ചെയ്യാനും, ചാനൽ സബ്സ്ക്രൈബ് ചെയ്യാനും മറക്കരുതേ. ലോട്ടറി ഫലങ്ങൾ പ്രസിദ്ധീകരിക്കുമ്പോൾ തന്നെ വേഗത്തിൽ അറിയാനും വിശദമായ വിവരങ്ങൾക്കുമായി, ഡിസ്ക്രിപ്ഷനിലും എബൗട്ട് സെക്ഷനിലും നൽകിയിട്ടുള്ള ലിങ്ക് വഴി ഞങ്ങളുടെ വാട്സ്ആപ്പ് ചാനലിൽ ജോയിൻ ചെയ്യുക."
+        
+        tts_output["Intro"] = f"{static_intro}\n\n{dynamic_intro}"
 
         prize_ml_names = {"1st Prize": "ഒന്നാം", "Consolation Prize": "സമാശ്വാസ", "2nd Prize": "രണ്ടാം", "3rd Prize": "മൂന്നാം", "4th Prize": "നാലാം", "5th Prize": "അഞ്ചാം", "6th Prize": "ആറാം", "7th Prize": "ഏഴാം", "8th Prize": "എട്ടാം", "9th Prize": "ഒമ്പതാം"}
         read_nums_for = ["1st Prize", "2nd Prize", "3rd Prize", "5th Prize", "Consolation Prize"]
@@ -461,11 +468,12 @@ def parse_lottery_result_page(target_url: str):
                     
                 tts_output[p_key] = sentence
         
-        return "\n".join(msg_output), tts_output, draw_date, prizes_data, prize_headings, clean_lottery_title
+        tts_string = "\n\n".join(tts_output.values())
+        return "\n".join(msg_output), tts_string, tts_output, draw_date, prizes_data, prize_headings, clean_lottery_title
 
     except Exception as e:
         print(f"**[LOG]** Parsing Error: {e}", flush=True)
-        return None, {}, None, {}, {}, None
+        return None, None, {}, None, {}, {}, None
 
 # ==========================================
 # 2. UTILITIES & BACKGROUND PRE-RENDERER
@@ -873,11 +881,11 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(raw_path): os.remove(raw_path)
 
-def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, base_dur, is_4col, end_delay):
+def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, base_dur, is_4col, start_delay, end_delay):
     audio_file = out_path.replace(".mp4", ".wav")
     audio_dur = get_audio_duration(audio_file)
     
-    start_delay = audio_dur if audio_dur > 0 else 2.0
+    start_delay = audio_dur if audio_dur > 0 else start_delay
     calc_dur = start_delay + base_dur
     total_frames = int(FPS * calc_dur)
     
@@ -1009,37 +1017,37 @@ def compress_and_combine(video_files, final_output):
         if os.path.exists(vid): os.remove(vid)
 
 async def execute_result_pipeline(app, chat_id, target_url):
-    msg = await app.send_message(chat_id, "🔎 **Fetching lottery draw data & Generating TTS...**")
+    msg = await app.send_message(chat_id, "🔎 **Fetching lottery draw data...**")
     
-    text_msg, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+    text_msg, tts_txt, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
     if not prizes:
         return await msg.edit_text("❌ Scraping failed or no data found. The results may not be fully published yet.")
 
+    # 1. Send Text Chunks
     await msg.delete()
     chunks = [text_msg[i:i+4000] for i in range(0, len(text_msg), 4000)]
     for chunk in chunks:
         await app.send_message(chat_id, chunk)
         await asyncio.sleep(0.5)
 
-    token = get_public_token()
-    if token:
-        status_tts = await app.send_message(chat_id, "🗣️ **Generating Studio Voiceovers...**")
-        batch_count = 0
-        
-        for p_name, tts_text in tts_dict.items():
-            if tts_text:
-                out_wav = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.wav")
-                await generate_cartesia_audio(tts_text, out_wav, token)
-                batch_count += 1
-                
-                if batch_count >= 10:
-                    token = get_public_token()
-                    batch_count = 0
-                    await asyncio.sleep(1)
-                    
-        await status_tts.delete()
+    # 2. Send TTS Document
+    if tts_txt and tts_txt.strip():
+        tts_file = io.BytesIO(tts_txt.encode('utf-8'))
+        tts_file.name = f"TTS_{draw_date}.txt"
+        await app.send_document(
+            chat_id=chat_id,
+            document=tts_file,
+            caption=f"🗣️ **Malayalam Pronunciation File for TTS**\n📅 `{draw_date}`"
+        )
+        await asyncio.sleep(0.5)
 
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes", callback_data=f"vy_{draw_date}"), InlineKeyboardButton("❌ No", callback_data=f"vn_{draw_date}")]])
+    # 3. Ask for Video Generation
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Yes", callback_data=f"vy_{draw_date}"),
+            InlineKeyboardButton("❌ No", callback_data=f"vn_{draw_date}")
+        ]
+    ])
     await app.send_message(chat_id, "🎬 **Do you want to generate the videos?**", reply_markup=keyboard)
 
 
@@ -1054,7 +1062,14 @@ async def run_pyrofork_bot():
 
         @app.on_message(filters.command("start") & filters.private)
         async def handle_start(client, message):
-            welcome = "👋 **Welcome to Kerala Lottery Video Generator Bot!**\n\n**Available Commands:**\n• `/generate` - Fetch today's result\n• `/gencustom` - Select from last 10 dates\n• `/combine` - Stitch uploaded videos\n• `/start` - Show this menu"
+            welcome = (
+                "👋 **Welcome to Kerala Lottery Video Generator Bot!** ✨\n\n"
+                "**🌟 Available Commands:**\n"
+                "• 🚀 `/start` - Show this menu\n"
+                "• 🎯 `/generate` - Fetch today's result & render pipeline\n"
+                "• 📅 `/gencustom` - Select from last 10 draw dates\n"
+                "• 🔗 `/combine` - Stitch uploaded videos together"
+            )
             await message.reply_text(welcome)
 
         @app.on_message(filters.command("generate") & filters.private)
@@ -1066,8 +1081,12 @@ async def run_pyrofork_bot():
         @app.on_message(filters.command("gencustom") & filters.private)
         async def handle_gencustom(client, message):
             draws = fetch_last_10_draws()
-            buttons = [[InlineKeyboardButton(f"📅 {item['date']} | {item['title'][:20]}", callback_data=f"get_{item['date']}")] for item in draws]
-            await message.reply_text("📅 **Select a date:**\n", reply_markup=InlineKeyboardMarkup(buttons))
+            text_lines = ["📅 **Select a date:**\n"]
+            buttons = []
+            for item in draws:
+                d_str = item['date']
+                buttons.append([InlineKeyboardButton(f"📅 {d_str} | {item['title'][:20]}", callback_data=f"get_{d_str}")])
+            await message.reply_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(buttons))
 
         @app.on_callback_query(filters.regex(r"^get_(\d{2}-\d{2}-\d{4})"))
         async def handle_get_callback(client, callback_query):
@@ -1085,8 +1104,15 @@ async def run_pyrofork_bot():
         async def handle_video_yes(client, callback_query):
             draw_date = callback_query.matches[0].group(1)
             tier_names = ["Intro", "1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]
-            buttons = [[InlineKeyboardButton(f"🎥 {n} Only", callback_data=f"rs_{i}_{draw_date}"), InlineKeyboardButton(f"⏭️ Up to {n}", callback_data=f"ru_{i}_{draw_date}")] for i, n in enumerate(tier_names)]
+            
+            buttons = []
+            for i, name in enumerate(tier_names):
+                buttons.append([
+                    InlineKeyboardButton(f"🎥 {name} Only", callback_data=f"rs_{i}_{draw_date}"),
+                    InlineKeyboardButton(f"⏭️ Up to {name}", callback_data=f"ru_{i}_{draw_date}")
+                ])
             buttons.append([InlineKeyboardButton("🔀 Custom Range", callback_data=f"rr_{draw_date}")])
+            
             await callback_query.message.edit_text("🎛️ **Select Video Generation Mode:**", reply_markup=InlineKeyboardMarkup(buttons))
 
         @app.on_callback_query(filters.regex(r"^(rs|ru)_(\d+)_(.*)"))
@@ -1096,41 +1122,63 @@ async def run_pyrofork_bot():
             
             draws = fetch_last_10_draws()
             target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
-            _, _, _, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+            _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
             
             tier_config = [
-                ("Intro", "intro", 0, False, "none", 0),
-                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0),
-                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_END_DELAY),
-                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0),
-                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0),
-                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_END_DELAY),
-                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_END_DELAY),
-                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_END_DELAY),
-                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
-                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
-                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY)
+                ("Intro", "intro", 0, False, "none", 0, 0),
+                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0, 0),
+                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_START_DELAY, CONSOLATION_END_DELAY),
+                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0, 0),
+                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0, 0),
+                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_START_DELAY, PRIZE_4TH_END_DELAY),
+                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_START_DELAY, PRIZE_5TH_END_DELAY),
+                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_START_DELAY, PRIZE_6TH_END_DELAY),
+                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
+                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
+                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY)
             ]
 
             video_files = []
             tiers_to_render = [tier_config[tier_idx]] if action == "rs" else tier_config[:tier_idx + 1]
             await callback_query.message.delete()
             
-            for p_name, engine, dur, is_4c, theme, end_delay in tiers_to_render:
+            token = get_public_token()
+            batch_count = 0
+
+            for p_name, engine, dur, is_4c, theme, start_delay, end_delay in tiers_to_render:
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
-                    status_msg = await client.send_message(callback_query.message.chat.id, f"🎬 **Rendering {p_name}...**")
+                    
+                    # 1. Generate & Send Audio First
+                    tts_text = tts_dict.get(p_name)
+                    audio_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.wav")
+                    
+                    if tts_text:
+                        status_msg = await client.send_message(callback_query.message.chat.id, f"🗣️ **Generating Studio Voiceover for {p_name}...**")
+                        if not token: token = get_public_token()
+                        await generate_cartesia_audio(tts_text, audio_path, token)
+                        batch_count += 1
+                        if batch_count >= 10:
+                            token = get_public_token()
+                            batch_count = 0
+                            await asyncio.sleep(1)
+                        
+                        if os.path.exists(audio_path):
+                            await client.send_audio(chat_id=callback_query.message.chat.id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n`{draw_date}`")
+                        await status_msg.delete()
+
+                    # 2. Render & Send Video
+                    status_msg = await client.send_message(callback_query.message.chat.id, f"🎬 **Rendering {p_name} Video...**")
                     out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
                     
-                    if engine == "intro":
-                        await asyncio.to_thread(intro.generate_video, out_path)
+                    if engine == "intro": await asyncio.to_thread(intro.generate_video, out_path)
                     else:
                         full_heading = prize_headings.get(p_name, p_name)
                         if engine == "bang": await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur)
-                        else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay)
+                        else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, start_delay, end_delay)
                     
                     video_files.append(out_path)
                     if action == "rs":
-                        await status_msg.edit_text(f"🚀 **Uploading {p_name}...**")
+                        await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
                         await client.send_video(chat_id=callback_query.message.chat.id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
                     await status_msg.delete()
 
@@ -1167,37 +1215,60 @@ async def run_pyrofork_bot():
             await message.reply_text("🔎 **Fetching data for custom range rendering...**")
             draws = fetch_last_10_draws()
             target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
-            _, _, _, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+            _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
             
             tier_config = [
-                ("Intro", "intro", 0, False, "none", 0),
-                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0),
-                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_END_DELAY),
-                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0),
-                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0),
-                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_END_DELAY),
-                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_END_DELAY),
-                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_END_DELAY),
-                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
-                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
-                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY)
+                ("Intro", "intro", 0, False, "none", 0, 0),
+                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0, 0),
+                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_START_DELAY, CONSOLATION_END_DELAY),
+                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0, 0),
+                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0, 0),
+                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_START_DELAY, PRIZE_4TH_END_DELAY),
+                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_START_DELAY, PRIZE_5TH_END_DELAY),
+                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_START_DELAY, PRIZE_6TH_END_DELAY),
+                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
+                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
+                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY)
             ]
 
             video_files = []
-            for p_name, engine, dur, is_4c, theme, end_delay in tier_config[start_idx : end_idx + 1]:
+            token = get_public_token()
+            batch_count = 0
+            
+            for p_name, engine, dur, is_4c, theme, start_delay, end_delay in tier_config[start_idx : end_idx + 1]:
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
-                    status_msg = await client.send_message(message.chat.id, f"🎬 **Rendering {p_name}...**")
+                    
+                    # 1. Generate & Send Audio First
+                    tts_text = tts_dict.get(p_name)
+                    audio_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.wav")
+                    
+                    if tts_text:
+                        status_msg = await client.send_message(message.chat.id, f"🗣️ **Generating Studio Voiceover for {p_name}...**")
+                        if not token: token = get_public_token()
+                        await generate_cartesia_audio(tts_text, audio_path, token)
+                        batch_count += 1
+                        if batch_count >= 10:
+                            token = get_public_token()
+                            batch_count = 0
+                            await asyncio.sleep(1)
+                        
+                        if os.path.exists(audio_path):
+                            await client.send_audio(chat_id=message.chat.id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n`{draw_date}`")
+                        await status_msg.delete()
+
+                    # 2. Render & Send Video
+                    status_msg = await client.send_message(message.chat.id, f"🎬 **Rendering {p_name} Video...**")
                     out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
                     
                     if engine == "intro": await asyncio.to_thread(intro.generate_video, out_path)
                     else:
                         full_heading = prize_headings.get(p_name, p_name)
                         if engine == "bang": await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur)
-                        else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay)
+                        else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, start_delay, end_delay)
                     
                     video_files.append(out_path)
                     if not UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE:
-                        await status_msg.edit_text(f"🚀 **Uploading {p_name}...**")
+                        await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
                         await client.send_video(chat_id=message.chat.id, video=out_path)
                     await status_msg.delete()
 
@@ -1258,3 +1329,4 @@ start_bot_thread()
 
 st.title("Kerala Lottery Video Engine 🎬")
 st.write("Bot is running. Powered by strict synchronous CV2 writing and ThreadPool Executor.")
+
