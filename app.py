@@ -1406,21 +1406,33 @@ def compress_and_combine(video_files, final_output):
         shutil.copy(video_files[0], final_output)
         return
 
-    list_path = os.path.join(DOWNLOAD_DIR, "concat_list.txt")
-    with open(list_path, "w") as f:
-        for vid in video_files:
-            f.write(f"file '{vid}'\n")
+    ts_files = []
+    # 1. Remux each MP4 into an intermediate .ts stream (Instant, fixes timescale bloat & audio drop)
+    for i, vid in enumerate(video_files):
+        ts_path = vid.replace(".mp4", f"_{i}.ts")
+        cmd_ts = [
+            "ffmpeg", "-y", "-i", vid,
+            "-c", "copy", "-bsf:v", "h264_mp4toannexb", "-f", "mpegts",
+            ts_path
+        ]
+        subprocess.run(cmd_ts, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(ts_path):
+            ts_files.append(ts_path)
 
-    cmd = [
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
-        "-c", "copy",
-        final_output
-    ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # 2. Concat all .ts streams seamlessly into the final combined MP4
+    if ts_files:
+        concat_str = "concat:" + "|".join(ts_files)
+        cmd_final = [
+            "ffmpeg", "-y", "-i", concat_str,
+            "-c", "copy", "-bsf:a", "aac_adtstoasc",
+            final_output
+        ]
+        subprocess.run(cmd_final, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    if os.path.exists(list_path):
-        os.remove(list_path)
-
+    # 3. Cleanup temporary .ts files and individual segment videos
+    for ts in ts_files:
+        if os.path.exists(ts):
+            os.remove(ts)
     for vid in video_files:
         if os.path.exists(vid):
             os.remove(vid)
