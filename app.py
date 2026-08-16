@@ -612,6 +612,7 @@ def parse_lottery_result_page(target_url: str):
             "6th Prize": "ആറാം", "7th Prize": "ഏഴാം", "8th Prize": "എട്ടാം", "9th Prize": "ഒമ്പതാം"
         }
         
+        # Read numbers only for 1st, 2nd, 3rd, and 5th Prizes (Consolation reads only money header)
         two_step_prizes = ["1st Prize", "2nd Prize", "3rd Prize", "5th Prize"]
         tts_file_blocks = [f"[Intro Header]\n{dynamic_intro}"]
 
@@ -665,9 +666,9 @@ def parse_lottery_result_page(target_url: str):
         return None, None, {}, None, {}, {}, None
 
 # ==========================================
-# 2. YOUTUBE METADATA & TIMESTAMPS GENERATOR
+# 2. YOUTUBE METADATA & DYNAMIC TIMESTAMPS GENERATOR
 # ==========================================
-def generate_youtube_package(lottery_title, draw_date, video_durations_map):
+def generate_youtube_package(lottery_title, draw_date, video_durations_map, prizes_data=None):
     code_match = re.search(r'([A-Za-z]{1,3}[-\s]*\d{1,4})', lottery_title)
     if code_match:
         code_str = code_match.group(1).replace(" ", "-").upper()
@@ -693,32 +694,66 @@ def generate_youtube_package(lottery_title, draw_date, video_durations_map):
         date_short = draw_date
         date_und = draw_date.replace("-", "_")
 
-    tier_order = [
-        ("Intro", "Intro & Live Broadcast"),
-        ("1st Prize", "1st Prize"),
-        ("Consolation Prize", "Consolation Prize"),
-        ("2nd Prize", "2nd Prize"),
-        ("3rd Prize", "3rd Prize"),
-        ("4th Prize", "4th Prize"),
-        ("5th Prize", "5th Prize"),
-        ("6th Prize", "6th Prize"),
-        ("7th Prize", "7th Prize"),
-        ("8th Prize", "8th Prize"),
-        ("9th Prize", "9th Prize")
+    prizes = prizes_data or {}
+
+    def get_clean_num(p_key):
+        items = prizes.get(p_key, [])
+        if items:
+            t = items[0]
+            dist_match = re.search(r'\(.*?\)', t)
+            if dist_match:
+                t = t.replace(dist_match.group(0), "").strip()
+            return t
+        return ""
+
+    num_1st = get_clean_num("1st Prize")
+    num_2nd = get_clean_num("2nd Prize")
+    num_3rd = get_clean_num("3rd Prize")
+
+    all_tier_keys = [
+        "Intro", "1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize",
+        "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"
     ]
+
+    tier_labels = {
+        "Intro": "Intro & Live Broadcast",
+        "1st Prize": f"{lottery_title} 1st Prize: {num_1st}" if num_1st else f"{lottery_title} 1st Prize",
+        "Consolation Prize": "Consolation Prize",
+        "2nd Prize": f"2nd Prize: {num_2nd}" if num_2nd else "2nd Prize",
+        "3rd Prize": f"3rd Prize: {num_3rd}" if num_3rd else "3rd Prize",
+        "4th Prize": "4th Prize",
+        "5th Prize": "5th Prize",
+        "6th Prize": "6th Prize",
+        "7th Prize": "7th Prize",
+        "8th Prize": "8th Prize",
+        "9th Prize": "9th Prize"
+    }
 
     timestamps_lines = []
     current_time = 0.0
+    last_rendered_index = -1
 
-    for key, label in tier_order:
-        ts_str = format_timestamp(current_time)
-        timestamps_lines.append(f"{ts_str} - {label}")
-        dur = video_durations_map.get(key, 0.0)
-        current_time += dur
+    for idx, key in enumerate(all_tier_keys):
+        if key in video_durations_map:
+            ts_str = format_timestamp(current_time)
+            lbl = tier_labels.get(key, key)
+            timestamps_lines.append(f"{ts_str} - {lbl}")
+            dur = video_durations_map[key]
+            current_time += dur
+            last_rendered_index = idx
 
-    if current_time > 0:
-        ts_789 = format_timestamp(current_time)
-        timestamps_lines.append(f"{ts_789} - 7th, 8th & 9th Prize Numbers")
+    # Conditional Trailing Timestamps for remaining unrendered prize numbers
+    if last_rendered_index != -1 and last_rendered_index < (len(all_tier_keys) - 1):
+        ts_future = format_timestamp(current_time)
+        last_key = all_tier_keys[last_rendered_index]
+        
+        if last_key in ["Intro", "1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "4th Prize", "5th Prize", "6th Prize"]:
+            timestamps_lines.append(f"{ts_future} - 7th, 8th & 9th Prize Numbers")
+        elif last_key == "7th Prize":
+            timestamps_lines.append(f"{ts_future} - 8th & 9th Prize Numbers")
+        elif last_key == "8th Prize":
+            timestamps_lines.append(f"{ts_future} - 9th Prize Numbers")
+        # If 9th Prize was rendered, NO trailing placeholder is added
 
     timestamps_text = "\n".join(timestamps_lines)
 
@@ -883,7 +918,7 @@ async def broadcast_to_channel(client, text=None, video_path=None, audio_path=No
     if not TARGET_CHANNEL_ID: return
     try:
         if text:
-            chunks = [text[i:i+3800] for i in range(0, len(text), 3800)]
+            chunks = [text[i:i+3500] for i in range(0, len(text), 3500)]
             for chunk in chunks:
                 await client.send_message(TARGET_CHANNEL_ID, chunk)
                 await asyncio.sleep(0.4)
@@ -1363,7 +1398,7 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     if os.path.exists(raw_path): os.remove(raw_path)
 
 # ==========================================
-# 5. BOT PIPELINE & FFMPEG STITCHING (FILTER_COMPLEX)
+# 5. BOT PIPELINE & FFMPEG STITCHING (STREAM-COPY CONCAT)
 # ==========================================
 def compress_and_combine(video_files, final_output):
     if not video_files: return
@@ -1387,7 +1422,8 @@ def compress_and_combine(video_files, final_output):
         os.remove(list_path)
 
     for vid in video_files:
-        if os.path.exists(vid): os.remove(vid)
+        if os.path.exists(vid):
+            os.remove(vid)
 
 async def execute_result_pipeline(app, chat_id, target_url):
     msg = await app.send_message(chat_id, "🔎 **Fetching lottery draw data...**")
@@ -1397,7 +1433,7 @@ async def execute_result_pipeline(app, chat_id, target_url):
         return await msg.edit_text("❌ Scraping failed or no data found. Results may not be fully published.")
 
     await msg.delete()
-    chunks = [text_msg[i:i+3800] for i in range(0, len(text_msg), 3800)]
+    chunks = [text_msg[i:i+3500] for i in range(0, len(text_msg), 3500)]
     for chunk in chunks:
         await app.send_message(chat_id, chunk)
         await asyncio.sleep(0.4)
@@ -1627,8 +1663,8 @@ async def run_pyrofork_bot():
                         video_files.append(vid_out)
                         video_durations_map[p_name] = get_video_duration(vid_out)
 
-            # Generate and Send 1-Tap Copyable YouTube Metadata Package
-            title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map)
+            # Generate and Send 1-Tap Copyable YouTube Metadata Package with Prize Numbers in Timestamps
+            title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map, prizes)
             await send_yt_metadata_package(client, callback_query.message.chat.id, title_1, title_2, yt_desc, yt_tags)
 
             if action == "ru" and len(video_files) > 1:
@@ -1704,8 +1740,8 @@ async def run_pyrofork_bot():
                         video_files.append(vid_out)
                         video_durations_map[p_name] = get_video_duration(vid_out)
 
-            # Generate and Send 1-Tap Copyable YouTube Metadata Package
-            title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map)
+            # Generate and Send 1-Tap Copyable YouTube Metadata Package with Prize Numbers in Timestamps
+            title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map, prizes)
             await send_yt_metadata_package(client, message.chat.id, title_1, title_2, yt_desc, yt_tags)
 
             if len(video_files) > 1:
