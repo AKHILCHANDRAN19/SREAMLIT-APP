@@ -26,7 +26,7 @@ import base64
 import uuid
 import wave
 
-# --- INDIC-NUM2WORDS LOADER ---
+# --- INDIC NUM2WORDS INTEGRATION ---
 try:
     from indic_num2words import num2words
 except ImportError:
@@ -240,7 +240,7 @@ def http_get(url: str):
         return cffi_requests.get(url, impersonate="chrome", timeout=10)
     return standard_requests.get(url, headers=headers, timeout=10)
 
-# --- MALAYALAM NUMERAL & TTS CONVERSION HELPERS ---
+# --- COMPLETE MALAYALAM DICTIONARIES ---
 ALPHA_TO_ML = {
     'A': 'എ', 'B': 'ബി', 'C': 'സി', 'D': 'ഡി', 'E': 'ഇ', 'F': 'എഫ്',
     'G': 'ജി', 'H': 'എച്ച്', 'I': 'ഐ', 'J': 'ജെ', 'K': 'കെ', 'L': 'എൽ',
@@ -254,7 +254,7 @@ DIGITS_TO_ML = {
     '5': 'അഞ്ച്', '6': 'ആറ്', '7': 'ഏഴ്', '8': 'എട്ട്', '9': 'ഒമ്പത്'
 }
 
-FALLBACK_AMOUNTS = {
+ML_PRIZE_WORDS = {
     100000000: "പത്ത് കോടി",
     80000000: "എട്ട് കോടി",
     75000000: "ഏഴര കോടി",
@@ -264,6 +264,7 @@ FALLBACK_AMOUNTS = {
     7000000: "എഴുപത് ലക്ഷം",
     5000000: "അമ്പത് ലക്ഷം",
     3000000: "മുപ്പത് ലക്ഷം",
+    2500000: "ഇരുപത്തിയഞ്ച് ലക്ഷം",
     1000000: "പത്ത് ലക്ഷം",
     500000: "അഞ്ച് ലക്ഷം",
     100000: "ഒരു ലക്ഷം",
@@ -279,8 +280,39 @@ FALLBACK_AMOUNTS = {
     100: "നൂറ്"
 }
 
+ML_DAYS = {
+    1: "ഒന്നാം", 2: "രണ്ടാം", 3: "മൂന്നാം", 4: "നാലാം", 5: "അഞ്ചാം",
+    6: "ആറാം", 7: "ഏഴാം", 8: "എട്ടാം", 9: "ഒമ്പതാം", 10: "പത്താം",
+    11: "പതിനൊന്നാം", 12: "പന്ത്രണ്ടാം", 13: "പതിമൂന്നാം", 14: "പതിനാലാം", 15: "പതിനഞ്ചാം",
+    16: "പതിനാറാം", 17: "പതിനേഴാം", 18: "പതിനെട്ടാം", 19: "പത്തൊമ്പതാം", 20: "ഇരുപതാം",
+    21: "ഇരുപത്തൊന്നാം", 22: "ഇരുപത്തിരണ്ടാം", 23: "ഇരുപത്തിമൂന്നാം", 24: "ഇരുപത്തിനാലാം", 25: "ഇരുപത്തിയഞ്ചാം",
+    26: "ഇരുപത്തിയാറാം", 27: "ഇരുപത്തിയേഴാം", 28: "ഇരുപത്തിയെട്ടാം", 29: "ഇരുപത്തൊമ്പതാം", 30: "മുപ്പതാം",
+    31: "മുപ്പത്തൊന്നാം"
+}
+
+ML_YEARS = {
+    2024: "രണ്ടായിരത്തി ഇരുപത്തിനാല്",
+    2025: "രണ്ടായിരത്തി ഇരുപത്തിയഞ്ച്",
+    2026: "രണ്ടായിരത്തി ഇരുപത്തിയാറ്",
+    2027: "രണ്ടായിരത്തി ഇരുപത്തിയേഴ്",
+    2028: "രണ്ടായിരത്തി ഇരുപത്തിയെട്ട്",
+    2029: "രണ്ടായിരത്തി ഇരുപത്തൊമ്പത്",
+    2030: "രണ്ടായിരത്തി മുപ്പത്"
+}
+
+ML_MONTHS = {
+    1: "ജനുവരി", 2: "ഫെബ്രുവരി", 3: "മാർച്ച്", 4: "ഏപ്രിൽ",
+    5: "മെയ്", 6: "ജൂൺ", 7: "ജൂലൈ", 8: "ആഗസ്റ്റ്",
+    9: "സെപ്റ്റംബർ", 10: "ഒക്ടോബർ", 11: "നവംബർ", 12: "ഡിസംബർ"
+}
+
+ML_WEEKDAYS = {
+    0: "തിങ്കളാഴ്ച", 1: "ചൊവ്വാഴ്ച", 2: "ബുധനാഴ്ച", 3: "വ്യാഴാഴ്ച",
+    4: "വെള്ളിയാഴ്ച", 5: "ശനിയാഴ്ച", 6: "ഞായറാഴ്ച"
+}
+
 def to_tts_format(ticket_str: str) -> str:
-    ticket_clean = re.sub(r'\(.*?\)', '', ticket_str).strip()
+    ticket_clean = re.sub(r'\(.*?\)|\[.*?\]', '', ticket_str).strip()
     match_series = re.match(r'^([A-Za-z]{2})\s*(\d{6})', ticket_clean)
     if match_series:
         series, number = match_series.group(1).upper(), match_series.group(2)
@@ -295,10 +327,14 @@ def to_tts_format(ticket_str: str) -> str:
         return ticket_clean
 
 def get_malayalam_prize_money(amount_str):
-    clean_num = re.sub(r'[^\d]', '', str(amount_str))
+    # Strip brackets, parentheses, and letters to avoid suffix digits (e.g., [1 CRORE])
+    clean_str = re.sub(r'\[.*?\]|\(.*?\)', '', str(amount_str))
+    clean_num = re.sub(r'[^\d]', '', clean_str)
     if not clean_num: return ""
     try:
         val = int(clean_num)
+        if val in ML_PRIZE_WORDS:
+            return ML_PRIZE_WORDS[val]
         if num2words:
             try:
                 converted = num2words(val, lang='ml')
@@ -306,8 +342,6 @@ def get_malayalam_prize_money(amount_str):
                     return converted.strip()
             except Exception:
                 pass
-        if val in FALLBACK_AMOUNTS:
-            return FALLBACK_AMOUNTS[val]
         return str(val)
     except Exception:
         return clean_num
@@ -514,18 +548,15 @@ def parse_lottery_result_page(target_url: str):
                 formatted_val = "  ".join(prizes_data[p_key]) if "Prize" in p_key and "1st" not in p_key and "2nd" not in p_key and "3rd" not in p_key and "Consolation" not in p_key else "\n".join(prizes_data[p_key])
                 msg_output.append(f"{emoji} **{prize_headings.get(p_key, p_key)}**\n`{formatted_val}`\n")
 
-        # --- PURE MALAYALAM TTS GENERATION ---
+        # --- 100% PURE MALAYALAM TTS GENERATION (ZERO ENGLISH) ---
         tts_output = {}
-        
-        ml_months = {1: "ജനുവരി", 2: "ഫെബ്രുവരി", 3: "മാർച്ച്", 4: "ഏപ്രിൽ", 5: "മെയ്", 6: "ജൂൺ", 7: "ജൂലൈ", 8: "ആഗസ്റ്റ്", 9: "സെപ്റ്റംബർ", 10: "ഒക്ടോബർ", 11: "നവംബർ", 12: "ഡിസംബർ"}
-        ml_weekdays = {0: "തിങ്കളാഴ്ച", 1: "ചൊവ്വാഴ്ച", 2: "ബുധനാഴ്ച", 3: "വ്യാഴാഴ്ച", 4: "വെള്ളിയാഴ്ച", 5: "ശനിയാഴ്ച", 6: "ഞായറാഴ്ച"}
         
         try:
             d = datetime.strptime(draw_date, "%d-%m-%Y")
-            y_sp = get_malayalam_prize_money(str(d.year))
-            m_sp = ml_months.get(d.month, "")
-            d_sp = "ഒന്നാം" if d.day == 1 else "രണ്ടാം" if d.day == 2 else f"{get_malayalam_prize_money(str(d.day))} ആം"
-            w_sp = ml_weekdays.get(d.weekday(), "")
+            y_sp = ML_YEARS.get(d.year, get_malayalam_prize_money(str(d.year)))
+            m_sp = ML_MONTHS.get(d.month, "")
+            d_sp = ML_DAYS.get(d.day, f"{get_malayalam_prize_money(str(d.day))} ആം")
+            w_sp = ML_WEEKDAYS.get(d.weekday(), "")
             dynamic_intro = f"ഇന്ന് {y_sp} {m_sp} മാസം {d_sp} തീയതി {w_sp} നടന്ന {malayalam_name_series} ലോട്ടറിയുടെ ഔദ്യോഗിക ഫലങ്ങളാണ് ഇപ്പോൾ പ്രഖ്യാപിക്കുന്നത്."
         except Exception:
             dynamic_intro = f"ഇന്ന് നടന്ന {malayalam_name_series} ലോട്ടറിയുടെ ഔദ്യോഗിക ഫലങ്ങളാണ് ഇപ്പോൾ പ്രഖ്യാപിക്കുന്നത്."
@@ -906,8 +937,8 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         delay_ms = int(impact_time * 1000)
         cmd.extend([
             "-i", audio_file, "-i", BANG_AUDIO_BGM, "-filter_complex", 
-            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100[a1];"
-            f"[2:a]aformat=channel_layouts=stereo:sample_rates=44100,adelay={delay_ms}|{delay_ms}[a2];"
+            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0[a1];"
+            f"[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.25,adelay={delay_ms}|{delay_ms}[a2];"
             f"[a1][a2]amix=inputs=2:duration=longest:dropout_transition=0[aout]", 
             "-map", "0:v", "-map", "[aout]"
         ])
@@ -1006,8 +1037,8 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     if os.path.exists(audio_file) and os.path.exists(SCROLL_AUDIO_BGM):
         cmd.extend([
             "-i", audio_file, "-i", SCROLL_AUDIO_BGM, "-filter_complex", 
-            "[1:a]aformat=channel_layouts=stereo:sample_rates=44100[a1];"
-            "[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.2[bgm];"
+            "[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0[a1];"
+            "[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.15[bgm];"
             "[a1][bgm]amix=inputs=2:duration=first[aout]", 
             "-map", "0:v", "-map", "[aout]"
         ])
@@ -1028,22 +1059,31 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     if os.path.exists(raw_path): os.remove(raw_path)
 
 # ==========================================
-# 4. BOT PIPELINE & FFMPEG STITCHING
+# 4. BOT PIPELINE & FFMPEG STITCHING (FILTER_COMPLEX)
 # ==========================================
 def compress_and_combine(video_files, final_output):
-    list_path = os.path.join(DOWNLOAD_DIR, "concat_list.txt")
-    with open(list_path, "w") as f:
-        for vid in video_files: f.write(f"file '{vid}'\n")
+    if not video_files: return
+    if len(video_files) == 1:
+        import shutil
+        shutil.copy(video_files[0], final_output)
+        return
 
-    cmd = [
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p",
+    cmd = ["ffmpeg", "-y"]
+    filter_inputs = ""
+    for i, vid in enumerate(video_files):
+        cmd.extend(["-i", vid])
+        filter_inputs += f"[{i}:v:0][{i}:a:0]"
+        
+    filter_complex = f"{filter_inputs}concat=n={len(video_files)}:v=1:a=1[v][a]"
+    cmd.extend([
+        "-filter_complex", filter_complex,
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "24", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         final_output
-    ]
+    ])
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    if os.path.exists(list_path): os.remove(list_path)
     for vid in video_files:
         if os.path.exists(vid): os.remove(vid)
 
