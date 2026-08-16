@@ -26,14 +26,11 @@ import base64
 import uuid
 import wave
 
-# --- SAFE INDIC-NUM2WORDS LOADER ---
+# --- INDIC-NUM2WORDS LOADER ---
 try:
     from indic_num2words import num2words
 except ImportError:
-    try:
-        from indic_num2words.indic_num2words import num2words
-    except ImportError:
-        num2words = None
+    num2words = None
 
 # ==========================================
 # --- USER CONFIGURATION BLOCK ---
@@ -260,6 +257,8 @@ DIGITS_TO_ML = {
 FALLBACK_AMOUNTS = {
     100000000: "പത്ത് കോടി",
     80000000: "എട്ട് കോടി",
+    75000000: "ഏഴര കോടി",
+    70000000: "ഏഴ് കോടി",
     10000000: "ഒരു കോടി",
     7500000: "എഴുപത്തിയഞ്ച് ലക്ഷം",
     7000000: "എഴുപത് ലക്ഷം",
@@ -300,10 +299,15 @@ def get_malayalam_prize_money(amount_str):
     if not clean_num: return ""
     try:
         val = int(clean_num)
+        if num2words:
+            try:
+                converted = num2words(val, lang='ml')
+                if converted and converted.strip():
+                    return converted.strip()
+            except Exception:
+                pass
         if val in FALLBACK_AMOUNTS:
             return FALLBACK_AMOUNTS[val]
-        if num2words:
-            return num2words(val, lang='ml')
         return str(val)
     except Exception:
         return clean_num
@@ -569,7 +573,6 @@ def parse_lottery_result_page(target_url: str):
         
         tts_string = "\n\n".join(tts_file_blocks)
         
-        # Store in singleton cache for subsequent instant render callbacks
         GLOBAL_STATE.scraped_cache[draw_date] = {
             "text_msg": "\n".join(msg_output),
             "tts_txt": tts_string,
@@ -727,7 +730,6 @@ def pre_render_ribbon_scroll(title_text):
     final.alpha_composite(layer)
     return final
 
-# Lightweight bounded Hero Text Renderer (Safe from OOM)
 def pre_render_tight_hero_text(text):
     font = load_font("hero", 320)
     temp_draw = ImageDraw.Draw(Image.new("RGBA", (1,1)))
@@ -890,10 +892,8 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         out.write(cv2.cvtColor(np.array(final_frame), cv2.COLOR_RGBA2BGR))
 
         if progress_cb and frame % 25 == 0:
-            try:
-                progress_cb(frame + 1, total_frames)
-            except Exception:
-                pass
+            try: progress_cb(frame + 1, total_frames)
+            except Exception: pass
 
     out.release()
     if progress_cb:
@@ -904,13 +904,26 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     cmd = ["ffmpeg", "-y", "-i", raw_path]
     if os.path.exists(audio_file) and os.path.exists(BANG_AUDIO_BGM):
         delay_ms = int(impact_time * 1000)
-        cmd.extend(["-i", audio_file, "-i", BANG_AUDIO_BGM, "-filter_complex", 
-                   f"[2:a]adelay={delay_ms}|{delay_ms}[b_delayed];[1:a][b_delayed]amix=inputs=2:duration=longest[aout]", 
-                   "-map", "0:v", "-map", "[aout]"])
+        cmd.extend([
+            "-i", audio_file, "-i", BANG_AUDIO_BGM, "-filter_complex", 
+            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100[a1];"
+            f"[2:a]aformat=channel_layouts=stereo:sample_rates=44100,adelay={delay_ms}|{delay_ms}[a2];"
+            f"[a1][a2]amix=inputs=2:duration=longest:dropout_transition=0[aout]", 
+            "-map", "0:v", "-map", "[aout]"
+        ])
     elif os.path.exists(audio_file):
-        cmd.extend(["-i", audio_file, "-map", "0:v", "-map", "1:a"])
+        cmd.extend([
+            "-i", audio_file, "-filter_complex",
+            "[1:a]aformat=channel_layouts=stereo:sample_rates=44100[aout]",
+            "-map", "0:v", "-map", "[aout]"
+        ])
+    else:
+        cmd.extend([
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-map", "0:v", "-map", "1:a"
+        ])
         
-    cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", out_path])
+    cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", out_path])
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(raw_path): os.remove(raw_path)
 
@@ -980,10 +993,8 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
 
         if progress_cb and frame % 30 == 0:
-            try:
-                progress_cb(frame + 1, total_frames)
-            except Exception:
-                pass
+            try: progress_cb(frame + 1, total_frames)
+            except Exception: pass
 
     out.release()
     if progress_cb:
@@ -993,13 +1004,26 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
 
     cmd = ["ffmpeg", "-y", "-i", raw_path]
     if os.path.exists(audio_file) and os.path.exists(SCROLL_AUDIO_BGM):
-        cmd.extend(["-i", audio_file, "-i", SCROLL_AUDIO_BGM, "-filter_complex", 
-                   "[2:a]volume=0.2[bgm];[1:a][bgm]amix=inputs=2:duration=first[aout]", 
-                   "-map", "0:v", "-map", "[aout]"])
+        cmd.extend([
+            "-i", audio_file, "-i", SCROLL_AUDIO_BGM, "-filter_complex", 
+            "[1:a]aformat=channel_layouts=stereo:sample_rates=44100[a1];"
+            "[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.2[bgm];"
+            "[a1][bgm]amix=inputs=2:duration=first[aout]", 
+            "-map", "0:v", "-map", "[aout]"
+        ])
     elif os.path.exists(audio_file):
-        cmd.extend(["-i", audio_file, "-map", "0:v", "-map", "1:a"])
+        cmd.extend([
+            "-i", audio_file, "-filter_complex",
+            "[1:a]aformat=channel_layouts=stereo:sample_rates=44100[aout]",
+            "-map", "0:v", "-map", "[aout]"
+        ])
+    else:
+        cmd.extend([
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-map", "0:v", "-map", "1:a"
+        ])
         
-    cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", out_path])
+    cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", out_path])
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(raw_path): os.remove(raw_path)
 
@@ -1011,7 +1035,12 @@ def compress_and_combine(video_files, final_output):
     with open(list_path, "w") as f:
         for vid in video_files: f.write(f"file '{vid}'\n")
 
-    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path, "-c:v", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", final_output]
+    cmd = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        final_output
+    ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     if os.path.exists(list_path): os.remove(list_path)
@@ -1120,7 +1149,7 @@ async def run_pyrofork_bot():
             
             await callback_query.message.edit_text("🎛️ **Select Video Generation Mode:**", reply_markup=InlineKeyboardMarkup(buttons))
 
-        async def render_and_process_tier(client, chat_id, p_name, engine, dur, is_4c, theme, end_delay, tts_entry, prizes, prize_headings, lottery_title, draw_date, upload_individual=True):
+        async def render_and_process_tier(client, chat_id, p_name, engine, dur, is_4c, theme, end_delay, tts_entry, prizes, prize_headings, lottery_title, draw_date):
             audio_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.wav")
             out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
             part1_dur = 0.0
@@ -1154,7 +1183,7 @@ async def run_pyrofork_bot():
                     else:
                         await generate_cartesia_audio(str(tts_entry), audio_path)
 
-                    if upload_individual and os.path.exists(audio_path):
+                    if os.path.exists(audio_path):
                         await client.send_audio(chat_id=chat_id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n📅 `{draw_date}`")
                 except Exception as e:
                     GLOBAL_STATE.log(f"Audio error on {p_name}: {e}")
@@ -1168,7 +1197,6 @@ async def run_pyrofork_bot():
                 pct = int((current / total) * 100)
                 GLOBAL_STATE.set_status(f"Rendering {p_name}", current / total, f"Frame {current}/{total} ({pct}%)")
                 
-                # Safe threadsafe Telegram message update
                 now = time.time()
                 if now - last_ui_update[0] > 3.0 and GLOBAL_STATE.main_event_loop:
                     last_ui_update[0] = now
@@ -1192,7 +1220,7 @@ async def run_pyrofork_bot():
                         scroll_start = part1_dur if part1_dur > 0 else None
                         await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay, scroll_start, on_frame_progress)
 
-                if upload_individual and os.path.exists(out_path):
+                if os.path.exists(out_path):
                     await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
                     await client.send_video(chat_id=chat_id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
             except Exception as e:
@@ -1207,7 +1235,6 @@ async def run_pyrofork_bot():
             action, tier_idx, draw_date = callback_query.matches[0].group(1), int(callback_query.matches[0].group(2)), callback_query.matches[0].group(3)
             await callback_query.message.edit_text("🔎 **Fetching draw results for rendering...**")
             
-            # Retrieve from cache to guarantee no data loss or URL shifting
             if draw_date in GLOBAL_STATE.scraped_cache:
                 c_data = GLOBAL_STATE.scraped_cache[draw_date]
                 tts_dict = c_data["tts_dict"]
@@ -1240,20 +1267,19 @@ async def run_pyrofork_bot():
             for p_name, engine, dur, is_4c, theme, end_delay in tiers_to_render:
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
                     tts_entry = tts_dict.get(p_name)
-                    should_upload_ind = (action == "rs")
                     vid_out = await render_and_process_tier(
                         client, callback_query.message.chat.id, p_name, engine, dur, is_4c, theme, end_delay,
-                        tts_entry, prizes, prize_headings, lottery_title, draw_date, upload_individual=should_upload_ind
+                        tts_entry, prizes, prize_headings, lottery_title, draw_date
                     )
                     if vid_out:
                         video_files.append(vid_out)
 
-            if action == "ru" and len(video_files) > 0:
+            if action == "ru" and len(video_files) > 1:
                 GLOBAL_STATE.set_status("Final Stitching", 0.95, f"Combining {len(video_files)} video segments...")
                 status_msg = await client.send_message(callback_query.message.chat.id, "🗜️ **Combining selected videos...**")
                 await asyncio.to_thread(compress_and_combine, video_files, FINAL_OUTPUT_VIDEO)
                 await status_msg.edit_text("🚀 **Uploading final combined video...**")
-                await client.send_video(chat_id=callback_query.message.chat.id, video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Combined Draw**\n📅 `{draw_date}`")
+                await client.send_video(chat_id=callback_query.message.chat.id, video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Final Combined Broadcast**\n📅 `{draw_date}`")
                 await status_msg.delete()
                 if os.path.exists(FINAL_OUTPUT_VIDEO): os.remove(FINAL_OUTPUT_VIDEO)
                 GLOBAL_STATE.set_status("Idle", 1.0, "Ready")
@@ -1311,15 +1337,14 @@ async def run_pyrofork_bot():
             for p_name, engine, dur, is_4c, theme, end_delay in tier_config[start_idx : end_idx + 1]:
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
                     tts_entry = tts_dict.get(p_name)
-                    should_upload_ind = not UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE
                     vid_out = await render_and_process_tier(
                         client, message.chat.id, p_name, engine, dur, is_4c, theme, end_delay,
-                        tts_entry, prizes, prize_headings, lottery_title, draw_date, upload_individual=should_upload_ind
+                        tts_entry, prizes, prize_headings, lottery_title, draw_date
                     )
                     if vid_out:
                         video_files.append(vid_out)
 
-            if len(video_files) > 0:
+            if len(video_files) > 1:
                 status_msg = await client.send_message(message.chat.id, "🗜️ **Combining custom range...**")
                 await asyncio.to_thread(compress_and_combine, video_files, FINAL_OUTPUT_VIDEO)
                 await status_msg.edit_text("🚀 **Uploading combined sequence...**")
