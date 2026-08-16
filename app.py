@@ -49,9 +49,9 @@ DURATION_2ND_PRIZE = 2.5         # Extra holding time after numbers are read
 DURATION_3RD_PRIZE = 2.5         # Extra holding time after numbers are read
 
 DURATION_CONSOLATION = 20.0      # 16 seconds scroll after header
-DURATION_4TH_PRIZE = 25.0        # 25 seconds scroll after header
+DURATION_4TH_PRIZE = 30.0        # 25 seconds scroll after header
 DURATION_5TH_PRIZE = 25.0        # 25 seconds scroll after header/numbers
-DURATION_6TH_PRIZE = 25.0        # 25 seconds scroll after header
+DURATION_6TH_PRIZE = 35.0        # 25 seconds scroll after header
 DURATION_7TH_PRIZE = 110.0        # 1.30 minutes (90 seconds) scroll after header
 DURATION_8TH_PRIZE = 110.0        # 1.30 minutes (90 seconds) scroll after header
 DURATION_9TH_PRIZE = 110.0        # 1.30 minutes (90 seconds) scroll after header
