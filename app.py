@@ -53,7 +53,6 @@ DURATION_8TH_PRIZE = 90
 DURATION_9TH_PRIZE = 90
 
 # 2. SCROLL SPEED SETTINGS (END DELAYS)
-# Start delays are now dynamically controlled by audio duration.
 CONSOLATION_END_DELAY = 2.0
 PRIZE_4TH_END_DELAY = 2.0
 PRIZE_5TH_END_DELAY = 2.0
@@ -68,14 +67,12 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 FINAL_OUTPUT_VIDEO = os.path.join(DOWNLOAD_DIR, "final_combined_lottery.mp4")
 
-# Background Audio Paths
 BANG_AUDIO_BGM = os.path.join(DOWNLOAD_DIR, "cinematic_bang.wav")
 SCROLL_AUDIO_BGM = os.path.join(DOWNLOAD_DIR, "calm_scroll_bgm.wav")
 
 FPS = 30
 WIDTH, HEIGHT = 1920, 1080
 
-# --- FONT LOADER ---
 FONTS = {
     "hero": os.path.join(BASE_DIR, "Anton-Regular.ttf"),
     "black": os.path.join(BASE_DIR, "Montserrat-Black.ttf"),
@@ -86,10 +83,8 @@ FONTS = {
 def load_font(font_key, size):
     font_path = FONTS.get(font_key, "")
     if os.path.exists(font_path):
-        try:
-            return ImageFont.truetype(font_path, size)
-        except Exception:
-            pass
+        try: return ImageFont.truetype(font_path, size)
+        except: pass
     return ImageFont.load_default()
 
 def get_audio_duration(audio_path):
@@ -97,31 +92,24 @@ def get_audio_duration(audio_path):
     try:
         with wave.open(audio_path, 'rb') as f:
             return f.getnframes() / float(f.getframerate())
-    except:
-        res = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path], stdout=subprocess.PIPE, text=True)
-        try: return float(res.stdout.strip())
-        except: return 0.0
+    except: return 0.0
 
 # ==========================================
 # PYTHON AUDIO SYNTHESIZERS
 # ==========================================
 def generate_cinematic_bang(file_path):
     if os.path.exists(file_path): return
-    print(f"**[LOG]** Synthesizing Cinematic Bang Audio to {file_path}...", flush=True)
+    print(f"**[LOG]** Synthesizing Cinematic Bang Audio...", flush=True)
     sample_rate = 44100
-    duration = 4.5
-    total_samples = int(sample_rate * duration)
-    
+    total_samples = int(sample_rate * 4.5)
     pcm = array.array('h')
-    sub_phase, brass_phase1, brass_phase2 = 0.0, 0.0, 0.0
-    l_filter_state, r_filter_state = 0.0, 0.0
+    sub_phase, brass_phase1, brass_phase2, l_filter, r_filter = 0.0, 0.0, 0.0, 0.0, 0.0
     
     for i in range(total_samples):
         t = i / sample_rate
         sub_freq = 28.0 + 102.0 * math.exp(-12.0 * t)
         sub_phase += 2.0 * math.pi * sub_freq / sample_rate
-        sub_env = math.exp(-1.4 * t)
-        sub_tone = (math.sin(sub_phase) + 0.3 * math.sin(2.0 * sub_phase)) * sub_env
+        sub_tone = (math.sin(sub_phase) + 0.3 * math.sin(2.0 * sub_phase)) * math.exp(-1.4 * t)
         
         brass_freq = 55.0 * (1.0 - 0.15 * math.exp(-3.0 * t))
         brass_phase1 += 2.0 * math.pi * brass_freq / sample_rate
@@ -130,24 +118,20 @@ def generate_cinematic_bang(file_path):
         brass_tone_r = math.sin(brass_phase2) + 0.5 * math.sin(2.0 * brass_phase2)
         brass_env = math.exp(-2.2 * t) * (1.0 / (1.0 + math.exp(-100.0 * t)))
         
-        raw_noise_l, raw_noise_r = random.uniform(-1.0, 1.0), random.uniform(-1.0, 1.0)
+        raw_l, raw_r = random.uniform(-1.0, 1.0), random.uniform(-1.0, 1.0)
         crack_env = 1.4 * math.exp(-45.0 * t)
-        crack_l, crack_r = raw_noise_l * crack_env, raw_noise_r * crack_env
         
         alpha = 0.08 + 0.35 * math.exp(-18.0 * t)
-        l_filter_state = alpha * raw_noise_l + (1.0 - alpha) * l_filter_state
-        r_filter_state = alpha * raw_noise_r + (1.0 - alpha) * r_filter_state
-        tail_env = math.exp(-1.1 * t)
-        rumble_l, rumble_r = l_filter_state * tail_env * 0.75, r_filter_state * tail_env * 0.75
+        l_filter = alpha * raw_l + (1.0 - alpha) * l_filter
+        r_filter = alpha * raw_r + (1.0 - alpha) * r_filter
+        rumble_l = l_filter * math.exp(-1.1 * t) * 0.75
+        rumble_r = r_filter * math.exp(-1.1 * t) * 0.75
         
-        mix_l = 0.65 * sub_tone + 0.35 * (brass_tone_l * brass_env) + 0.55 * crack_l + rumble_l
-        mix_r = 0.65 * sub_tone + 0.35 * (brass_tone_r * brass_env) + 0.55 * crack_r + rumble_r
+        mix_l = 0.65 * sub_tone + 0.35 * (brass_tone_l * brass_env) + 0.55 * (raw_l * crack_env) + rumble_l
+        mix_r = 0.65 * sub_tone + 0.35 * (brass_tone_r * brass_env) + 0.55 * (raw_r * crack_env) + rumble_r
         
-        out_l = math.tanh(mix_l * 1.5)
-        out_r = math.tanh(mix_r * 1.5)
-        
-        pcm.append(int(max(-32768, min(32767, out_l * 32767 * 0.95))))
-        pcm.append(int(max(-32768, min(32767, out_r * 32767 * 0.95))))
+        pcm.append(int(max(-32768, min(32767, math.tanh(mix_l * 1.5) * 32767 * 0.95))))
+        pcm.append(int(max(-32768, min(32767, math.tanh(mix_r * 1.5) * 32767 * 0.95))))
         
     with wave.open(file_path, "wb") as wf:
         wf.setnchannels(2)
@@ -157,36 +141,22 @@ def generate_cinematic_bang(file_path):
 
 def generate_calm_bgm(file_path, duration=90.0):
     if os.path.exists(file_path): return
-    print(f"**[LOG]** Synthesizing Calm Scroll Ambient Pad to {file_path}...", flush=True)
+    print(f"**[LOG]** Synthesizing Calm Scroll Ambient Pad...", flush=True)
     sample_rate = 44100
     total_samples = int(sample_rate * duration)
-    
     pcm = array.array('h')
     freqs = [110.0, 164.81, 220.0, 246.94, 329.63] 
-    chunk_size = 44100
     
-    for chunk_start in range(0, total_samples, chunk_size):
-        chunk_end = min(chunk_start + chunk_size, total_samples)
-        for i in range(chunk_start, chunk_end):
-            t = i / sample_rate
-            mix_l, mix_r = 0.0, 0.0
-            
-            for j, f in enumerate(freqs):
-                lfo = 0.5 + 0.5 * math.sin(2.0 * math.pi * (0.05 + j * 0.01) * t)
-                val_l = math.sin(2.0 * math.pi * f * t) * lfo
-                val_r = math.sin(2.0 * math.pi * (f * 1.002) * t) * lfo
-                mix_l += val_l * 0.12
-                mix_r += val_r * 0.12
-            
-            env = 1.0
-            if t < 2.0: env = t / 2.0
-            elif t > duration - 2.0: env = (duration - t) / 2.0
-            
-            out_l = math.tanh(mix_l * env)
-            out_r = math.tanh(mix_r * env)
-            
-            pcm.append(int(max(-32768, min(32767, out_l * 32767))))
-            pcm.append(int(max(-32768, min(32767, out_r * 32767))))
+    for i in range(total_samples):
+        t = i / sample_rate
+        mix_l, mix_r = 0.0, 0.0
+        for j, f in enumerate(freqs):
+            lfo = 0.5 + 0.5 * math.sin(2.0 * math.pi * (0.05 + j * 0.01) * t)
+            mix_l += math.sin(2.0 * math.pi * f * t) * lfo * 0.12
+            mix_r += math.sin(2.0 * math.pi * (f * 1.002) * t) * lfo * 0.12
+        env = t / 2.0 if t < 2.0 else ((duration - t) / 2.0 if t > duration - 2.0 else 1.0)
+        pcm.append(int(max(-32768, min(32767, math.tanh(mix_l * env) * 32767))))
+        pcm.append(int(max(-32768, min(32767, math.tanh(mix_r * env) * 32767))))
             
     with wave.open(file_path, "wb") as wf:
         wf.setnchannels(2)
@@ -207,8 +177,7 @@ except ImportError:
 
 def http_get(url: str):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    if USE_CURL_CFFI:
-        return cffi_requests.get(url, impersonate="chrome")
+    if USE_CURL_CFFI: return cffi_requests.get(url, impersonate="chrome")
     return standard_requests.get(url, headers=headers)
 
 # --- MALAYALAM TTS CONVERSION HELPERS ---
@@ -226,47 +195,43 @@ DIGITS_TO_ML = {
 }
 
 def to_tts_format(ticket_str: str) -> str:
-    match_series = re.match(r'^([A-Z]{2})\s*(\d{6})(.*)$', ticket_str)
+    ticket_str = re.sub(r'\(.*?\)', '', ticket_str).strip()
+    match_series = re.match(r'^([A-Z]{2,3})\s*(\d{6})', ticket_str)
     if match_series:
-        series, number, extra = match_series.group(1), match_series.group(2), match_series.group(3).strip()
+        series, number = match_series.group(1), match_series.group(2)
         s_parts = [ALPHA_TO_ML.get(c, c) for c in series]
         n_parts = [DIGITS_TO_ML.get(d, d) for d in number]
-        combined = " , ".join(s_parts + n_parts)
-        if extra: combined += f" {extra}"
-        return combined
+        return " , ".join(s_parts + n_parts)
     else:
-        n_parts = [DIGITS_TO_ML.get(d, d) for d in ticket_str]
-        return " , ".join(n_parts)
+        return " , ".join([DIGITS_TO_ML.get(d, d) for d in ticket_str])
 
 def get_malayalam_prize_money(amount_str):
     if not num2words: return amount_str
     clean_num = re.sub(r'[^\d]', '', amount_str)
     if not clean_num: return amount_str
-    try:
-        val = int(clean_num)
-        return num2words(val, lang='ml')
-    except:
-        return amount_str
+    try: return num2words(int(clean_num), lang='ml')
+    except: return amount_str
 
 # ==========================================
-# CARTESIA TTS ENGINE
+# CARTESIA TTS ENGINE (USER PROVIDED CONNECTION)
 # ==========================================
 CARTESIA_VIJAY_ID = "374b80da-e622-4dfc-90f6-1eeb13d331c9"
 
 def get_public_token():
-    print("🔑 Fetching fresh Cartesia token...", flush=True)
     url = "https://backend.cartesia.ai/access-token/public"
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://cartesia.ai/languages/malayalam"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36",
+        "Referer": "https://cartesia.ai/languages/malayalam"
+    }
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        data = response.json()
-        return data.get("token", data.get("access_token"))
+        return response.json().get("token", response.json().get("access_token"))
     except Exception as e:
-        print(f"❌ Failed to get token: {e}", flush=True)
+        print(f"❌ Failed to get token. Error: {e}")
         return None
 
-async def generate_cartesia_audio(text, output_filename, token, retries=3):
+async def generate_cartesia_audio(text, output_filename, token):
     ws_url = f"wss://api.cartesia.ai/tts/websocket?cartesia_version=2024-06-10&api_key={token}"
     payload = {
         "context_id": str(uuid.uuid4()),
@@ -276,29 +241,26 @@ async def generate_cartesia_audio(text, output_filename, token, retries=3):
         "voice": {"mode": "id", "id": CARTESIA_VIJAY_ID},
         "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": 44100}
     }
-    for attempt in range(retries):
-        try:
-            async with websockets.connect(ws_url, ping_interval=None) as ws:
-                await ws.send(json.dumps(payload))
-                audio_buffer = bytearray()
-                while True:
-                    response = json.loads(await ws.recv())
-                    if response.get("type") == "chunk":
-                        audio_buffer.extend(base64.b64decode(response["data"]))
-                    elif response.get("type") == "done":
-                        with wave.open(output_filename, "wb") as wav_file:
-                            wav_file.setnchannels(1)         
-                            wav_file.setsampwidth(2)         
-                            wav_file.setframerate(44100)     
-                            wav_file.writeframes(audio_buffer) 
-                        return True
-                    elif response.get("type") == "error":
-                        print(f"❌ Cartesia Error: {response.get('error')}", flush=True)
-                        break
-        except Exception as e:
-            print(f"❌ Cartesia Connection Error (Attempt {attempt+1}/{retries}): {e}", flush=True)
-            await asyncio.sleep(2)
-    return False
+    try:
+        async with websockets.connect(ws_url) as ws:
+            await ws.send(json.dumps(payload))
+            audio_buffer = bytearray()
+            while True:
+                response = json.loads(await ws.recv())
+                if response.get("type") == "chunk":
+                    audio_buffer.extend(base64.b64decode(response["data"]))
+                elif response.get("type") == "done":
+                    with wave.open(output_filename, "wb") as wav_file:
+                        wav_file.setnchannels(1)         
+                        wav_file.setsampwidth(2)         
+                        wav_file.setframerate(44100)     
+                        wav_file.writeframes(audio_buffer) 
+                    break
+                elif response.get("type") == "error":
+                    print(f"❌ Cartesia Error: {response.get('error')}")
+                    break
+    except Exception as e:
+        print(f"❌ Cartesia Connection Error: {e}")
 
 # ==========================================
 # 1. SCRAPING LOGIC
@@ -323,7 +285,6 @@ def fetch_last_10_draws():
             if len(draws) >= 10: break
         return draws
     except Exception as e:
-        print(f"**[LOG]** Error fetching draws: {e}", flush=True)
         return []
 
 def clean_prize_heading(raw_str):
@@ -343,8 +304,7 @@ def parse_lottery_result_page(target_url: str):
         res = http_get(target_url)
         soup = BeautifulSoup(res.text, 'html.parser')
         post_body = soup.find('div', id=re.compile(r'post-body-'))
-        if not post_body:
-            return "❌ Could not parse body.", None, {}, None, {}, {}, None
+        if not post_body: return "❌ Could not parse body.", {}, None, {}, {}, None
 
         h1_tag = soup.find('h1', class_='entry-title')
         raw_title = h1_tag.get_text(strip=True) if h1_tag else "KERALA LOTTERY"
@@ -358,18 +318,13 @@ def parse_lottery_result_page(target_url: str):
         full_text = post_body.get_text(separator=' ')
         lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
 
-        # Native Malayalam Name & Series Extraction Hook
         malayalam_name_series = clean_lottery_title
         for i, line in enumerate(lines):
             if 'തത്സമയ നറുക്കെടുപ്പ്' in line and 'റിസൾട്ട്' in line:
                 parts = line.split('റിസൾട്ട്')
-                if len(parts) > 1 and parts[1].strip():
-                    potential_name = parts[1].strip()
-                elif i + 1 < len(lines):
-                    potential_name = lines[i+1].strip()
-                else:
-                    potential_name = clean_lottery_title
-                
+                if len(parts) > 1 and parts[1].strip(): potential_name = parts[1].strip()
+                elif i + 1 < len(lines): potential_name = lines[i+1].strip()
+                else: potential_name = clean_lottery_title
                 potential_name = re.sub(r'[\.\-]', ' ', potential_name)
                 malayalam_name_series = re.sub(r'\s+', ' ', potential_name).strip()
                 break
@@ -388,7 +343,6 @@ def parse_lottery_result_page(target_url: str):
 
         for line in lines:
             if any(sp in line.lower() for sp in ["prize winners are advised to verify", "government gazette", "tomorrow draw details"]): break
-            
             matched_header = next((ph for ph in prize_headers if ph.lower() in line.lower()), None)
             if matched_header:
                 current_prize_key = matched_header
@@ -396,12 +350,8 @@ def parse_lottery_result_page(target_url: str):
                     prizes_data[current_prize_key] = []
                     cln_head = clean_prize_heading(line)
                     prize_headings[current_prize_key] = cln_head
-                    
-                    if '₹' in cln_head:
-                        money_str = cln_head.split('₹')[-1].strip()
-                        prize_money_ml[current_prize_key] = get_malayalam_prize_money(money_str)
-                    else:
-                        prize_money_ml[current_prize_key] = ""
+                    if '₹' in cln_head: prize_money_ml[current_prize_key] = get_malayalam_prize_money(cln_head.split('₹')[-1].strip())
+                    else: prize_money_ml[current_prize_key] = ""
                 continue
 
             if current_prize_key:
@@ -414,15 +364,13 @@ def parse_lottery_result_page(target_url: str):
 
         msg_output = [f"🎟️ **{clean_lottery_title}**", f"📅 **Date:** `{draw_date}`", f"🔢 **Series:** `{series_str}`", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"]
         prize_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣")]
-
         for p_key, emoji in prize_order:
             if p_key in prizes_data and prizes_data[p_key]:
                 formatted_val = "  ".join(prizes_data[p_key]) if "Prize" in p_key and "1st" not in p_key and "2nd" not in p_key and "3rd" not in p_key and "Consolation" not in p_key else "\n".join(prizes_data[p_key])
                 msg_output.append(f"{emoji} **{prize_headings.get(p_key, p_key)}**\n`{formatted_val}`\n")
 
-        # --- TTS GENERATION BLOCK ---
-        tts_output = {}
-        
+        # --- TTS SPLIT GENERATION BLOCK ---
+        tts_dict = {}
         ml_years = {str(y): get_malayalam_prize_money(str(y)) for y in range(2024, 2031)}
         ml_months = {1: "ജനുവരി", 2: "ഫെബ്രുവരി", 3: "മാർച്ച്", 4: "ഏപ്രിൽ", 5: "മെയ്", 6: "ജൂൺ", 7: "ജൂലൈ", 8: "ആഗസ്റ്റ്", 9: "സെപ്റ്റംബർ", 10: "ഒക്ടോബർ", 11: "നവംബർ", 12: "ഡിസംബർ"}
         ml_days = {i: f"{get_malayalam_prize_money(str(i))} ആം" for i in range(1, 32)}
@@ -431,15 +379,10 @@ def parse_lottery_result_page(target_url: str):
         
         try:
             d = datetime.strptime(draw_date, "%d-%m-%Y")
-            y_sp = ml_years.get(str(d.year), str(d.year))
-            m_sp = ml_months.get(d.month, "")
-            d_sp = ml_days.get(d.day, "")
-            w_sp = ml_weekdays.get(d.weekday(), "")
+            y_sp, m_sp, d_sp, w_sp = ml_years.get(str(d.year), str(d.year)), ml_months.get(d.month, ""), ml_days.get(d.day, ""), ml_weekdays.get(d.weekday(), "")
             dynamic_intro = f"ഇന്ന് {y_sp} {m_sp} മാസം {d_sp} തീയതി {w_sp} നടന്ന {malayalam_name_series} ലോട്ടറിയുടെ ഔദ്യോഗിക ഫലങ്ങളാണ് ഇപ്പോൾ പ്രഖ്യാപിക്കുന്നത്."
         except:
             dynamic_intro = f"ഇന്ന് നടന്ന {malayalam_name_series} ലോട്ടറിയുടെ ഔദ്യോഗിക ഫലങ്ങളാണ് ഇപ്പോൾ പ്രഖ്യാപിക്കുന്നത്."
-
-        tts_output["Intro"] = dynamic_intro
 
         prize_ml_names = {"1st Prize": "ഒന്നാം", "Consolation Prize": "സമാശ്വാസ", "2nd Prize": "രണ്ടാം", "3rd Prize": "മൂന്നാം", "4th Prize": "നാലാം", "5th Prize": "അഞ്ചാം", "6th Prize": "ആറാം", "7th Prize": "ഏഴാം", "8th Prize": "എട്ടാം", "9th Prize": "ഒമ്പതാം"}
         read_nums_for = ["1st Prize", "2nd Prize", "3rd Prize", "5th Prize", "Consolation Prize"]
@@ -449,25 +392,20 @@ def parse_lottery_result_page(target_url: str):
                 money_txt = prize_money_ml.get(p_key, "")
                 p_name_ml = prize_ml_names.get(p_key, "")
                 
-                if "Consolation" in p_key:
-                    sentence = f"{money_txt} രൂപയുടെ {p_name_ml} സമ്മാനം ലഭിച്ച അക്കങ്ങൾ"
-                elif p_key in ["1st Prize", "2nd Prize", "3rd Prize"]:
-                    sentence = f"{money_txt} രൂപയുടെ {p_name_ml} സമ്മാനത്തിന് അർഹമായ അക്കങ്ങൾ താഴെ പറയുന്നവയാണ്"
-                else:
-                    sentence = f"{money_txt} രൂപയുടെ {p_name_ml} സമ്മാനത്തിന് അർഹമായ അവസാന നാല് അക്കങ്ങൾ"
+                if "Consolation" in p_key: hdr = f"{money_txt} രൂപയുടെ {p_name_ml} സമ്മാനം ലഭിച്ച അക്കങ്ങൾ"
+                elif p_key in ["1st Prize", "2nd Prize", "3rd Prize"]: hdr = f"{money_txt} രൂപയുടെ {p_name_ml} സമ്മാനത്തിന് അർഹമായ അക്കങ്ങൾ താഴെ പറയുന്നവയാണ്"
+                else: hdr = f"{money_txt} രൂപയുടെ {p_name_ml} സമ്മാനത്തിന് അർഹമായ അവസാന നാല് അക്കങ്ങൾ"
 
-                if p_key in read_nums_for:
-                    nums = " , ".join([to_tts_format(x) for x in prizes_data[p_key]])
-                    sentence += f"... {nums}"
-                    
-                tts_output[p_key] = sentence
+                if p_key == "1st Prize":
+                    hdr = f"{dynamic_intro} {hdr}"
+
+                nums = " , ".join([to_tts_format(x) for x in prizes_data[p_key]]) if p_key in read_nums_for else ""
+                tts_dict[p_key] = {"header": hdr, "numbers": nums}
         
-        tts_string = "\n\n".join(tts_output.values())
-        return "\n".join(msg_output), tts_string, tts_output, draw_date, prizes_data, prize_headings, clean_lottery_title
-
+        return "\n".join(msg_output), tts_dict, draw_date, prizes_data, prize_headings, clean_lottery_title
     except Exception as e:
         print(f"**[LOG]** Parsing Error: {e}", flush=True)
-        return None, None, {}, None, {}, {}, None
+        return None, {}, None, {}, {}, None
 
 # ==========================================
 # 2. UTILITIES & BACKGROUND PRE-RENDERER
@@ -490,15 +428,9 @@ def generate_vertical_gradient(w, h, stops):
     return Image.fromarray(gradient, mode="RGBA")
 
 def pre_render_background(theme="blue"):
-    themes = {
-        "purple": (35, 5, 25, 30, 10, 35),
-        "blue": (10, 25, 50, 5, 10, 30),
-        "silver": (45, 45, 50, 20, 20, 25),
-        "gold": (50, 35, 10, 30, 20, 5)
-    }
+    themes = {"purple": (35, 5, 25, 30, 10, 35), "blue": (10, 25, 50, 5, 10, 30), "silver": (45, 45, 50, 20, 20, 25), "gold": (50, 35, 10, 30, 20, 5)}
     if theme not in themes: theme = "blue"
     r1, g1, b1, r2, g2, b2 = themes[theme]
-    
     y_coords, x_coords = np.ogrid[:HEIGHT, :WIDTH]
     cx, cy = WIDTH / 2, HEIGHT / 2
     norm_dist = np.clip(np.hypot(x_coords - cx, y_coords - cy) / math.hypot(cx, cy), 0, 1)
@@ -509,7 +441,6 @@ def pre_render_background(theme="blue"):
     a = np.full((HEIGHT, WIDTH), 255, dtype=np.uint8)
     
     canvas = Image.fromarray(np.dstack((r, g, b, a)), mode="RGBA")
-    
     bl = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     glow_color = (255, 80, 120, 80) if theme == "purple" else (80, 150, 255, 80) if theme == "blue" else (255, 215, 0, 60)
     ImageDraw.Draw(bl).ellipse([int(cx - 700), int(cy - 200), int(cx + 700), int(cy + 450)], fill=glow_color)
@@ -519,26 +450,20 @@ def pre_render_background(theme="blue"):
 def pre_render_glass_card(district_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
-    f_sub = load_font("bold", 48) 
-    f_main = load_font("black", 85) 
+    f_sub, f_main = load_font("bold", 48), load_font("black", 85) 
     
     bbox = draw.textbbox((0, 0), district_text, font=f_main)
-    text_w = bbox[2] - bbox[0]
-    box_w = max(920, text_w + 160)
-    x1 = (WIDTH // 2) - (box_w // 2)
-    x2 = (WIDTH // 2) + (box_w // 2)
-    bounds = [x1, 780, x2, 1000]
+    box_w = max(920, (bbox[2] - bbox[0]) + 160)
+    bounds = [(WIDTH // 2) - (box_w // 2), 780, (WIDTH // 2) + (box_w // 2), 1000]
     
     draw.rounded_rectangle(bounds, radius=30, fill=(20, 10, 35, 230), outline=(255, 215, 0, 190), width=4)
     draw.rounded_rectangle([bounds[0]+2, bounds[1]+2, bounds[2]-2, bounds[3]-2], radius=28, outline=(255, 255, 255, 100), width=2)
     
     draw.text((WIDTH//2, 835), "WINNING DISTRICT", font=f_sub, fill="#B8C0D0", anchor="mm")
     main_y = 925
-    
     glow = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     ImageDraw.Draw(glow).text((WIDTH//2, main_y), district_text, font=f_main, fill=(255, 215, 0, 120), anchor="mm")
     layer.alpha_composite(glow.filter(ImageFilter.GaussianBlur(15)))
-    
     draw.text((WIDTH//2, main_y + 5), district_text, font=f_main, fill=(0,0,0,230), anchor="mm")
     draw.text((WIDTH//2, main_y), district_text, font=f_main, fill="#FFFFFF", anchor="mm")
     return layer
@@ -546,31 +471,25 @@ def pre_render_glass_card(district_text):
 def pre_render_ribbon_bang(title_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
-    cx, cy = WIDTH//2, 310
-    font = load_font("extrabold", 44)
+    cx, cy, font = WIDTH//2, 310, load_font("extrabold", 44)
     
     bbox = draw.textbbox((0, 0), title_text.upper(), font=font)
-    text_w = bbox[2] - bbox[0]
-    w = max(1040, text_w + 120)
-    h = 130
-    x1, y1 = cx - w//2, cy - h//2
-    x2, y2 = cx + w//2, cy + h//2
+    w, h = max(1040, (bbox[2] - bbox[0]) + 120), 130
+    x1, y1, x2, y2 = cx - w//2, cy - h//2, cx + w//2, cy + h//2
     
     mask_c = Image.new("L", (WIDTH, HEIGHT), 0)
     ImageDraw.Draw(mask_c).rectangle([x1, y1, x2, y2], fill=255)
     
     stops = [(0.0, (255, 245, 180)), (0.15, (255, 215, 0)), (0.85, (230, 150, 0)), (1.0, (180, 100, 0))]
-    grad = generate_vertical_gradient(WIDTH, h, stops)
     grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    grad_layer.paste(grad, (0, y1))
+    grad_layer.paste(generate_vertical_gradient(WIDTH, h, stops), (0, y1))
     layer.paste(grad_layer, (0,0), mask_c)
     draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=3)
     
     draw.text((cx, cy-2), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
     draw.text((cx, cy-5), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
     
-    shadow = layer.copy().filter(ImageFilter.GaussianBlur(15))
-    shadow_data = np.array(shadow)
+    shadow_data = np.array(layer.copy().filter(ImageFilter.GaussianBlur(15)))
     shadow_data[..., :3] = 0
     final = Image.fromarray(shadow_data)
     final.alpha_composite(layer)
@@ -579,58 +498,47 @@ def pre_render_ribbon_bang(title_text):
 def pre_render_ribbon_scroll(title_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
-    cx, cy = WIDTH//2, 280
-    font = load_font("extrabold", 44)
+    cx, cy, font = WIDTH//2, 280, load_font("extrabold", 44)
     
     bbox = draw.textbbox((0, 0), title_text.upper(), font=font)
-    text_w = bbox[2] - bbox[0]
-    w = max(1040, text_w + 120)
-    h = 120
-    x1, y1 = cx - w//2, cy - h//2
-    x2, y2 = cx + w//2, cy + h//2
+    w, h = max(1040, (bbox[2] - bbox[0]) + 120), 120
+    x1, y1, x2, y2 = cx - w//2, cy - h//2, cx + w//2, cy + h//2
     
     mask_c = Image.new("L", (WIDTH, HEIGHT), 0)
     ImageDraw.Draw(mask_c).rectangle([x1, y1, x2, y2], fill=255)
     
     stops = [(0.0, (255, 245, 180)), (0.15, (255, 215, 0)), (0.85, (230, 150, 0)), (1.0, (180, 100, 0))]
-    grad = generate_vertical_gradient(WIDTH, h, stops)
     grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    grad_layer.paste(grad, (0, y1))
+    grad_layer.paste(generate_vertical_gradient(WIDTH, h, stops), (0, y1))
     layer.paste(grad_layer, (0,0), mask_c)
     draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=3)
     
     draw.text((cx, cy-2), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
     draw.text((cx, cy-5), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
     
-    shadow = layer.copy().filter(ImageFilter.GaussianBlur(15))
-    shadow_data = np.array(shadow)
+    shadow_data = np.array(layer.copy().filter(ImageFilter.GaussianBlur(15)))
     shadow_data[..., :3] = 0
     final = Image.fromarray(shadow_data)
     final.alpha_composite(layer)
     return final
 
 def pre_render_hero_text(text):
-    font = load_font("hero", 320)
-    layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-    cx, cy = WIDTH // 2, 570
+    font, layer = load_font("hero", 320), Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    draw, cx, cy = ImageDraw.Draw(layer), WIDTH // 2, 570
     bbox = draw.textbbox((cx, cy), text, font=font, anchor="mm")
     text_y_start, text_height = max(0, int(bbox[1])), max(1, int(bbox[3] - bbox[1]))
     
     shadow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     ImageDraw.Draw(shadow).text((cx, cy + 30), text, font=font, fill=(0, 0, 0, 240), anchor="mm")
     layer.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(25)))
-    
-    for i in range(18, 0, -1):
-        draw.text((cx, cy + i), text, font=font, fill=(70, 15, 0, 255), anchor="mm")
+    for i in range(18, 0, -1): draw.text((cx, cy + i), text, font=font, fill=(70, 15, 0, 255), anchor="mm")
         
     mask = Image.new("L", (WIDTH, HEIGHT), 0)
     ImageDraw.Draw(mask).text((cx, cy), text, font=font, fill=255, anchor="mm")
     
     stops = [(0.0, (255, 255, 230)), (0.2, (255, 220, 0)), (0.7, (255, 160, 0)), (1.0, (180, 60, 0))]
-    grad = generate_vertical_gradient(WIDTH, text_height, stops)
     grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    grad_layer.paste(grad, (0, text_y_start))
+    grad_layer.paste(generate_vertical_gradient(WIDTH, text_height, stops), (0, text_y_start))
     layer.paste(grad_layer, (0, 0), mask)
     draw.text((cx, cy), text, font=font, fill=None, outline=(255, 240, 150, 255), stroke_width=4, anchor="mm")
     return layer
@@ -641,9 +549,7 @@ def pre_render_grid_card(text, is_small=False):
     draw = ImageDraw.Draw(layer)
     draw.rounded_rectangle([0, 0, w, h], radius=15, fill=(15, 5, 20, 240), outline=(255, 215, 0, 200), width=3)
     draw.rounded_rectangle([3, 3, w-3, h-3], radius=12, outline=(255, 255, 255, 50), width=1)
-    
-    cx, cy = w // 2, h // 2 - 5
-    font = load_font("hero", 80 if is_small else 95)
+    cx, cy, font = w // 2, h // 2 - 5, load_font("hero", 80 if is_small else 95)
     draw.text((cx, cy + 5), text, font=font, fill=(0, 0, 0, 255), anchor="mm")
     draw.text((cx, cy), text, font=font, fill=(255, 250, 240, 255), anchor="mm")
     return layer
@@ -661,13 +567,7 @@ MP_LOTTERY_TITLE = ""
 
 def init_worker_assets(bg_asset, ribbon, scroll_mask, giant_canvas, math_cache, title):
     global MP_BG_ASSET, MP_RIBBON_ASSET, MP_SCROLL_MASK, MP_BEAM_TEMPLATE, MP_BIG_CARDS_LAYER, MP_MATH_CACHE, MP_LOTTERY_TITLE
-    MP_BG_ASSET = bg_asset
-    MP_RIBBON_ASSET = ribbon
-    MP_SCROLL_MASK = scroll_mask
-    MP_BIG_CARDS_LAYER = giant_canvas
-    MP_MATH_CACHE = math_cache
-    MP_LOTTERY_TITLE = title
-    
+    MP_BG_ASSET, MP_RIBBON_ASSET, MP_SCROLL_MASK, MP_BIG_CARDS_LAYER, MP_MATH_CACHE, MP_LOTTERY_TITLE = bg_asset, ribbon, scroll_mask, giant_canvas, math_cache, title
     bt = Image.new("RGBA", (800, HEIGHT), (0,0,0,0))
     ImageDraw.Draw(bt).polygon([(500, 0), (700, 0), (200, HEIGHT), (0, HEIGHT)], fill=(255, 255, 255, 120))
     MP_BEAM_TEMPLATE = bt.filter(ImageFilter.GaussianBlur(15))
@@ -683,12 +583,9 @@ def mp_render_single_frame(frame_index):
 
     cards_layer = MP_BIG_CARDS_LAYER.crop((0, m['crop_y'], WIDTH, m['crop_y'] + HEIGHT))
     cards_layer.putalpha(ImageChops.multiply(cards_layer.split()[3], MP_SCROLL_MASK))
-
     if m['c_op'] < 1.0:
-        if m['c_op'] == 0.0:
-            cards_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-        else:
-            cards_layer.putalpha(cards_layer.split()[3].point(lambda p: p * m['c_op']))
+        if m['c_op'] == 0.0: cards_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
+        else: cards_layer.putalpha(cards_layer.split()[3].point(lambda p: p * m['c_op']))
 
     beam_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     beam_layer.paste(MP_BEAM_TEMPLATE, (m['beam_x'] - 350, 0))
@@ -700,13 +597,11 @@ def mp_render_single_frame(frame_index):
     if m['badge_glitters'] or m['floating_glitters']:
         g_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
         g_draw = ImageDraw.Draw(g_layer)
-        
         for glitters in [m['badge_glitters'], m['floating_glitters']]:
             for cx, cy, s, op in glitters:
                 g_draw.line([(cx-s, cy), (cx+s, cy)], fill=(255, 235, 100, op), width=3)
                 g_draw.line([(cx, cy-s), (cx, cy+s)], fill=(255, 235, 100, op), width=3)
                 g_draw.ellipse([cx-4, cy-4, cx+4, cy+4], fill=(255, 255, 255, op))
-                
         canvas.alpha_composite(g_layer.filter(ImageFilter.GaussianBlur(3)))
         canvas.alpha_composite(g_layer)
 
@@ -715,27 +610,21 @@ def mp_render_single_frame(frame_index):
             ribbon_fade = MP_RIBBON_ASSET.copy()
             ribbon_fade.putalpha(ribbon_fade.split()[3].point(lambda p: p * m['r_op']))
             canvas.alpha_composite(ribbon_fade)
-        else:
-            canvas.alpha_composite(MP_RIBBON_ASSET)
+        else: canvas.alpha_composite(MP_RIBBON_ASSET)
 
     return cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR)
 
 # ==========================================
 # 4. VIDEO RENDERING ENGINES
 # ==========================================
-def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_dur):
-    audio_file = out_path.replace(".mp4", ".wav")
-    audio_dur = get_audio_duration(audio_file)
-    
-    calc_dur = audio_dur + 2.0 if audio_dur > 0 else base_dur
+def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_dur, hdr_wav, nums_wav):
+    hdr_dur, num_dur = get_audio_duration(hdr_wav), get_audio_duration(nums_wav)
+    impact_time = hdr_dur if hdr_dur > 0 else 1.0
+    calc_dur = impact_time + num_dur + 2.0
     total_frames = int(FPS * calc_dur)
     
-    impact_time = audio_dur if audio_dur > 0 else 1.0
-    
     bg_asset = pre_render_background(theme)
-    
-    ticket_num = item
-    district = "KERALA"
+    district, ticket_num = "KERALA", item
     dist_match = re.search(r'\((.*?)\)', item)
     if dist_match:
         district = dist_match.group(1).upper()
@@ -836,8 +725,7 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
                 bx = int(200 + (1500 * ((time_sec - (impact_time + 0.2)) / 0.6)))
                 beam_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
                 ImageDraw.Draw(beam_layer).polygon([(bx+100, 0), (bx+300, 0), (bx-100, HEIGHT), (bx-300, HEIGHT)], fill=(255, 255, 255, 200))
-                beam_layer = beam_layer.filter(ImageFilter.GaussianBlur(15))
-                beam_layer.putalpha(ImageChops.multiply(beam_layer.split()[3], hero_alpha_mask))
+                beam_layer.putalpha(ImageChops.multiply(beam_layer.filter(ImageFilter.GaussianBlur(15)).split()[3], hero_alpha_mask))
                 canvas.alpha_composite(beam_layer)
 
             glitter_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
@@ -861,24 +749,44 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     gc.collect()
 
     cmd = ["ffmpeg", "-y", "-i", raw_path]
-    if os.path.exists(audio_file) and os.path.exists(BANG_AUDIO_BGM):
+    inputs = 0
+    filter_complex = ""
+    
+    if os.path.exists(hdr_wav):
+        cmd.extend(["-i", hdr_wav])
+        inputs += 1
+        
+    if os.path.exists(nums_wav):
+        cmd.extend(["-i", nums_wav])
         delay_ms = int(impact_time * 1000)
-        cmd.extend(["-i", audio_file, "-i", BANG_AUDIO_BGM, "-filter_complex", 
-                   f"[2:a]adelay={delay_ms}|{delay_ms}[b_delayed];[1:a][b_delayed]amix=inputs=2:duration=longest[aout]", 
-                   "-map", "0:v", "-map", "[aout]"])
-    elif os.path.exists(audio_file):
-        cmd.extend(["-i", audio_file, "-map", "0:v", "-map", "1:a"])
+        idx = inputs
+        filter_complex += f"[{idx}:a]adelay={delay_ms}|{delay_ms}[num_del]; "
+        inputs += 1
+        
+    if os.path.exists(BANG_AUDIO_BGM):
+        cmd.extend(["-i", BANG_AUDIO_BGM])
+        delay_ms = int(impact_time * 1000)
+        idx = inputs
+        filter_complex += f"[{idx}:a]adelay={delay_ms}|{delay_ms}[bang_del]; "
+        inputs += 1
+
+    if inputs > 0:
+        mix_inputs = ""
+        if os.path.exists(hdr_wav): mix_inputs += "[1:a]"
+        if os.path.exists(nums_wav): mix_inputs += "[num_del]"
+        if os.path.exists(BANG_AUDIO_BGM): mix_inputs += "[bang_del]"
+        
+        filter_complex += f"{mix_inputs}amix=inputs={inputs}:duration=longest[aout]"
+        cmd.extend(["-filter_complex", filter_complex, "-map", "0:v", "-map", "[aout]"])
         
     cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", out_path])
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(raw_path): os.remove(raw_path)
 
-def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, base_dur, is_4col, end_delay):
-    audio_file = out_path.replace(".mp4", ".wav")
-    audio_dur = get_audio_duration(audio_file)
-    
-    start_delay = audio_dur if audio_dur > 0 else 2.0
-    calc_dur = start_delay + base_dur
+def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, base_dur, is_4col, end_delay, hdr_wav, nums_wav):
+    hdr_dur, num_dur = get_audio_duration(hdr_wav), get_audio_duration(nums_wav)
+    start_delay = hdr_dur if hdr_dur > 0 else 2.0
+    calc_dur = start_delay + max(base_dur, num_dur + end_delay)
     total_frames = int(FPS * calc_dur)
     
     cols = 4 if is_4col else 2
@@ -901,8 +809,7 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     mask = Image.new("L", (WIDTH, HEIGHT), 0)
     m_draw = ImageDraw.Draw(mask)
     fade_start, fade_end = 360, 420
-    for y in range(fade_start, fade_end):
-        m_draw.line([(0, y), (WIDTH, y)], fill=int(255 * (y - fade_start) / (fade_end - fade_start)))
+    for y in range(fade_start, fade_end): m_draw.line([(0, y), (WIDTH, y)], fill=int(255 * (y - fade_start) / (fade_end - fade_start)))
     m_draw.rectangle([0, fade_end, WIDTH, HEIGHT], fill=255)
 
     math_cache = []
@@ -935,14 +842,12 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
             crop_y = max_scroll
             
         c_op = 1.0
-        if time_sec < 0.8:
-            c_op = max((time_sec - 0.2) / 0.6, 0.0)
+        if time_sec < 0.8: c_op = max((time_sec - 0.2) / 0.6, 0.0)
             
         beam_x = int(-400 + (2800 * ((time_sec % 3.0) / 3.0)))
         r_op = ease_out_expo(min(max((time_sec - 0.2) / 0.5, 0.0), 1.0)) if time_sec > 0.2 else 0.0
 
-        if random.random() < 0.5:
-            floating_glitters.append({'x': random.randint(150, 1770), 'y': random.randint(350, 1000), 'life': 1.0, 's': random.randint(10, 25)})
+        if random.random() < 0.5: floating_glitters.append({'x': random.randint(150, 1770), 'y': random.randint(350, 1000), 'life': 1.0, 's': random.randint(10, 25)})
         
         f_glitters = []
         for g in floating_glitters:
@@ -971,8 +876,7 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     
     workers = min(3, os.cpu_count() or 1)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        for bgr_frame in executor.map(mp_render_single_frame, range(total_frames), chunksize=15):
-            out.write(bgr_frame)
+        for bgr_frame in executor.map(mp_render_single_frame, range(total_frames), chunksize=15): out.write(bgr_frame)
 
     out.release()
     
@@ -982,12 +886,34 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     gc.collect()
 
     cmd = ["ffmpeg", "-y", "-i", raw_path]
-    if os.path.exists(audio_file) and os.path.exists(SCROLL_AUDIO_BGM):
-        cmd.extend(["-i", audio_file, "-i", SCROLL_AUDIO_BGM, "-filter_complex", 
-                   "[2:a]volume=0.2[bgm];[1:a][bgm]amix=inputs=2:duration=first[aout]", 
-                   "-map", "0:v", "-map", "[aout]"])
-    elif os.path.exists(audio_file):
-        cmd.extend(["-i", audio_file, "-map", "0:v", "-map", "1:a"])
+    inputs = 0
+    filter_complex = ""
+    
+    if os.path.exists(hdr_wav):
+        cmd.extend(["-i", hdr_wav])
+        inputs += 1
+        
+    if os.path.exists(nums_wav):
+        cmd.extend(["-i", nums_wav])
+        delay_ms = int(start_delay * 1000)
+        idx = inputs
+        filter_complex += f"[{idx}:a]adelay={delay_ms}|{delay_ms}[num_del]; "
+        inputs += 1
+        
+    if os.path.exists(SCROLL_AUDIO_BGM):
+        cmd.extend(["-i", SCROLL_AUDIO_BGM])
+        idx = inputs
+        filter_complex += f"[{idx}:a]volume=0.2[bgm]; "
+        inputs += 1
+
+    if inputs > 0:
+        mix_inputs = ""
+        if os.path.exists(hdr_wav): mix_inputs += "[1:a]"
+        if os.path.exists(nums_wav): mix_inputs += "[num_del]"
+        if os.path.exists(SCROLL_AUDIO_BGM): mix_inputs += "[bgm]"
+        
+        filter_complex += f"{mix_inputs}amix=inputs={inputs}:duration=longest[aout]"
+        cmd.extend(["-filter_complex", filter_complex, "-map", "0:v", "-map", "[aout]"])
         
     cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", out_path])
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1000,20 +926,16 @@ def compress_and_combine(video_files, final_output):
     list_path = os.path.join(DOWNLOAD_DIR, "concat_list.txt")
     with open(list_path, "w") as f:
         for vid in video_files: f.write(f"file '{vid}'\n")
-
     cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path, "-c:v", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", final_output]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
     if os.path.exists(list_path): os.remove(list_path)
     for vid in video_files:
         if os.path.exists(vid): os.remove(vid)
 
 async def execute_result_pipeline(app, chat_id, target_url):
     msg = await app.send_message(chat_id, "🔎 **Fetching lottery draw data...**")
-    
-    text_msg, tts_txt, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
-    if not prizes:
-        return await msg.edit_text("❌ Scraping failed or no data found. The results may not be fully published yet.")
+    text_msg, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+    if not prizes: return await msg.edit_text("❌ Scraping failed or no data found. The results may not be fully published yet.")
 
     await msg.delete()
     chunks = [text_msg[i:i+4000] for i in range(0, len(text_msg), 4000)]
@@ -1021,22 +943,19 @@ async def execute_result_pipeline(app, chat_id, target_url):
         await app.send_message(chat_id, chunk)
         await asyncio.sleep(0.5)
 
+    tts_txt_lines = []
+    for p_key, tts_val in tts_dict.items():
+        if tts_val.get("header"): tts_txt_lines.append(f"[{p_key} Header]\n{tts_val['header']}")
+        if tts_val.get("numbers"): tts_txt_lines.append(f"[{p_key} Numbers]\n{tts_val['numbers']}")
+    
+    tts_txt = "\n\n".join(tts_txt_lines)
     if tts_txt and tts_txt.strip():
         tts_file = io.BytesIO(tts_txt.encode('utf-8'))
         tts_file.name = f"TTS_{draw_date}.txt"
-        await app.send_document(
-            chat_id=chat_id,
-            document=tts_file,
-            caption=f"🗣️ **Malayalam Pronunciation File for TTS**\n📅 `{draw_date}`"
-        )
+        await app.send_document(chat_id=chat_id, document=tts_file, caption=f"🗣️ **Malayalam Pronunciation File for TTS**\n📅 `{draw_date}`")
         await asyncio.sleep(0.5)
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Yes", callback_data=f"vy_{draw_date}"),
-            InlineKeyboardButton("❌ No", callback_data=f"vn_{draw_date}")
-        ]
-    ])
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes", callback_data=f"vy_{draw_date}"), InlineKeyboardButton("❌ No", callback_data=f"vn_{draw_date}")]])
     await app.send_message(chat_id, "🎬 **Do you want to generate the videos?**", reply_markup=keyboard)
 
 
@@ -1101,7 +1020,6 @@ async def run_pyrofork_bot():
                     InlineKeyboardButton(f"⏭️ Up to {name}", callback_data=f"ru_{i}_{draw_date}")
                 ])
             buttons.append([InlineKeyboardButton("🔀 Custom Range", callback_data=f"rr_{draw_date}")])
-            
             await callback_query.message.edit_text("🎛️ **Select Video Generation Mode:**", reply_markup=InlineKeyboardMarkup(buttons))
 
         @app.on_callback_query(filters.regex(r"^(rs|ru)_(\d+)_(.*)"))
@@ -1111,60 +1029,68 @@ async def run_pyrofork_bot():
             
             draws = fetch_last_10_draws()
             target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
-            _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+            _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
             
             tier_config = [
-                ("Intro", "intro", 0, False, "none", 0),
-                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0),
-                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_END_DELAY),
-                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0),
-                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0),
-                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_END_DELAY),
-                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_END_DELAY),
-                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_END_DELAY),
-                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
-                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
-                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY)
+                {"name": "Intro", "engine": "intro", "dur": 0, "is_4c": False, "theme": "none", "end_delay": 0},
+                {"name": "1st Prize", "engine": "bang", "dur": DURATION_1ST_PRIZE, "is_4c": False, "theme": "purple", "end_delay": 0},
+                {"name": "Consolation Prize", "engine": "scroll", "dur": DURATION_CONSOLATION, "is_4c": False, "theme": "blue", "end_delay": CONSOLATION_END_DELAY},
+                {"name": "2nd Prize", "engine": "bang", "dur": DURATION_2ND_PRIZE, "is_4c": False, "theme": "silver", "end_delay": 0},
+                {"name": "3rd Prize", "engine": "bang", "dur": DURATION_3RD_PRIZE, "is_4c": False, "theme": "gold", "end_delay": 0},
+                {"name": "4th Prize", "engine": "scroll", "dur": DURATION_4TH_PRIZE, "is_4c": False, "theme": "blue", "end_delay": PRIZE_4TH_END_DELAY},
+                {"name": "5th Prize", "engine": "scroll", "dur": DURATION_5TH_PRIZE, "is_4c": False, "theme": "blue", "end_delay": PRIZE_5TH_END_DELAY},
+                {"name": "6th Prize", "engine": "scroll", "dur": DURATION_6TH_PRIZE, "is_4c": False, "theme": "blue", "end_delay": PRIZE_6TH_END_DELAY},
+                {"name": "7th Prize", "engine": "scroll", "dur": DURATION_7TH_PRIZE, "is_4c": True, "theme": "blue", "end_delay": PRIZE_7_8_9_END_DELAY},
+                {"name": "8th Prize", "engine": "scroll", "dur": DURATION_8TH_PRIZE, "is_4c": True, "theme": "blue", "end_delay": PRIZE_7_8_9_END_DELAY},
+                {"name": "9th Prize", "engine": "scroll", "dur": DURATION_9TH_PRIZE, "is_4c": True, "theme": "blue", "end_delay": PRIZE_7_8_9_END_DELAY}
             ]
 
             video_files = []
             tiers_to_render = [tier_config[tier_idx]] if action == "rs" else tier_config[:tier_idx + 1]
             await callback_query.message.delete()
             
-            token = get_public_token()
-            batch_count = 0
-
-            for p_name, engine, dur, is_4c, theme, end_delay in tiers_to_render:
+            for t_data in tiers_to_render:
+                p_name, engine, dur, is_4c, theme, end_delay = t_data["name"], t_data["engine"], t_data["dur"], t_data["is_4c"], t_data["theme"], t_data["end_delay"]
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
                     
-                    tts_text = tts_dict.get(p_name)
-                    audio_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.wav")
+                    out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
                     
-                    if tts_text:
-                        status_msg = await client.send_message(callback_query.message.chat.id, f"🗣️ **Generating Studio Voiceover for {p_name}...**")
-                        if not token: token = get_public_token()
-                        await generate_cartesia_audio(tts_text, audio_path, token)
-                        batch_count += 1
-                        if batch_count >= 10:
-                            token = get_public_token()
-                            batch_count = 0
-                        await asyncio.sleep(2)
+                    if engine == "intro":
+                        status_msg = await client.send_message(callback_query.message.chat.id, f"🎬 **Rendering {p_name} Video...**")
+                        await asyncio.to_thread(intro.generate_video, out_path)
+                        video_files.append(out_path)
+                        if not UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE or action == "rs":
+                            await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
+                            await client.send_video(chat_id=callback_query.message.chat.id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
+                        await status_msg.delete()
+                        continue
                         
-                        if os.path.exists(audio_path):
-                            await client.send_audio(chat_id=callback_query.message.chat.id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n`{draw_date}`")
+                    hdr_text, nums_text = tts_dict.get(p_name, {}).get("header", ""), tts_dict.get(p_name, {}).get("numbers", "")
+                    hdr_wav = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}_header.wav")
+                    nums_wav = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}_numbers.wav")
+                    
+                    if hdr_text:
+                        status_msg = await client.send_message(callback_query.message.chat.id, f"🗣️ **Generating Audio 1 (Header) for {p_name}...**")
+                        token = get_public_token()
+                        await generate_cartesia_audio(hdr_text, hdr_wav, token)
+                        if os.path.exists(hdr_wav): await client.send_audio(chat_id=callback_query.message.chat.id, audio=hdr_wav, caption=f"🔊 **{p_name} Header Audio**")
+                        await status_msg.delete()
+                        
+                    if nums_text:
+                        status_msg = await client.send_message(callback_query.message.chat.id, f"🗣️ **Generating Audio 2 (Numbers) for {p_name}...**")
+                        token = get_public_token()
+                        await generate_cartesia_audio(nums_text, nums_wav, token)
+                        if os.path.exists(nums_wav): await client.send_audio(chat_id=callback_query.message.chat.id, audio=nums_wav, caption=f"🔊 **{p_name} Numbers Audio**")
                         await status_msg.delete()
 
                     status_msg = await client.send_message(callback_query.message.chat.id, f"🎬 **Rendering {p_name} Video...**")
-                    out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
+                    full_heading = prize_headings.get(p_name, p_name)
                     
-                    if engine == "intro": await asyncio.to_thread(intro.generate_video, out_path)
-                    else:
-                        full_heading = prize_headings.get(p_name, p_name)
-                        if engine == "bang": await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur)
-                        else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay)
+                    if engine == "bang": await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur, hdr_wav, nums_wav)
+                    else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay, hdr_wav, nums_wav)
                     
                     video_files.append(out_path)
-                    if action == "rs":
+                    if not UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE or action == "rs":
                         await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
                         await client.send_video(chat_id=callback_query.message.chat.id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
                     await status_msg.delete()
@@ -1202,55 +1128,62 @@ async def run_pyrofork_bot():
             await message.reply_text("🔎 **Fetching data for custom range rendering...**")
             draws = fetch_last_10_draws()
             target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
-            _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+            _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
             
             tier_config = [
-                ("Intro", "intro", 0, False, "none", 0),
-                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0),
-                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_END_DELAY),
-                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0),
-                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0),
-                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_END_DELAY),
-                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_END_DELAY),
-                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_END_DELAY),
-                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
-                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
-                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY)
+                {"name": "Intro", "engine": "intro", "dur": 0, "is_4c": False, "theme": "none", "end_delay": 0},
+                {"name": "1st Prize", "engine": "bang", "dur": DURATION_1ST_PRIZE, "is_4c": False, "theme": "purple", "end_delay": 0},
+                {"name": "Consolation Prize", "engine": "scroll", "dur": DURATION_CONSOLATION, "is_4c": False, "theme": "blue", "end_delay": CONSOLATION_END_DELAY},
+                {"name": "2nd Prize", "engine": "bang", "dur": DURATION_2ND_PRIZE, "is_4c": False, "theme": "silver", "end_delay": 0},
+                {"name": "3rd Prize", "engine": "bang", "dur": DURATION_3RD_PRIZE, "is_4c": False, "theme": "gold", "end_delay": 0},
+                {"name": "4th Prize", "engine": "scroll", "dur": DURATION_4TH_PRIZE, "is_4c": False, "theme": "blue", "end_delay": PRIZE_4TH_END_DELAY},
+                {"name": "5th Prize", "engine": "scroll", "dur": DURATION_5TH_PRIZE, "is_4c": False, "theme": "blue", "end_delay": PRIZE_5TH_END_DELAY},
+                {"name": "6th Prize", "engine": "scroll", "dur": DURATION_6TH_PRIZE, "is_4c": False, "theme": "blue", "end_delay": PRIZE_6TH_END_DELAY},
+                {"name": "7th Prize", "engine": "scroll", "dur": DURATION_7TH_PRIZE, "is_4c": True, "theme": "blue", "end_delay": PRIZE_7_8_9_END_DELAY},
+                {"name": "8th Prize", "engine": "scroll", "dur": DURATION_8TH_PRIZE, "is_4c": True, "theme": "blue", "end_delay": PRIZE_7_8_9_END_DELAY},
+                {"name": "9th Prize", "engine": "scroll", "dur": DURATION_9TH_PRIZE, "is_4c": True, "theme": "blue", "end_delay": PRIZE_7_8_9_END_DELAY}
             ]
 
             video_files = []
-            token = get_public_token()
-            batch_count = 0
-            
-            for p_name, engine, dur, is_4c, theme, end_delay in tier_config[start_idx : end_idx + 1]:
+            for t_data in tier_config[start_idx : end_idx + 1]:
+                p_name, engine, dur, is_4c, theme, end_delay = t_data["name"], t_data["engine"], t_data["dur"], t_data["is_4c"], t_data["theme"], t_data["end_delay"]
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
                     
-                    tts_text = tts_dict.get(p_name)
-                    audio_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.wav")
+                    out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
                     
-                    if tts_text:
-                        status_msg = await client.send_message(message.chat.id, f"🗣️ **Generating Studio Voiceover for {p_name}...**")
-                        if not token: token = get_public_token()
-                        await generate_cartesia_audio(tts_text, audio_path, token)
-                        batch_count += 1
-                        if batch_count >= 10:
-                            token = get_public_token()
-                            batch_count = 0
-                        await asyncio.sleep(2)
-                        
+                    if engine == "intro":
+                        status_msg = await client.send_message(message.chat.id, f"🎬 **Rendering {p_name} Video...**")
+                        await asyncio.to_thread(intro.generate_video, out_path)
+                        video_files.append(out_path)
                         if not UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE:
-                            if os.path.exists(audio_path):
-                                await client.send_audio(chat_id=message.chat.id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n`{draw_date}`")
+                            await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
+                            await client.send_video(chat_id=message.chat.id, video=out_path)
+                        await status_msg.delete()
+                        continue
+                        
+                    hdr_text, nums_text = tts_dict.get(p_name, {}).get("header", ""), tts_dict.get(p_name, {}).get("numbers", "")
+                    hdr_wav = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}_header.wav")
+                    nums_wav = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}_numbers.wav")
+                    
+                    if hdr_text:
+                        status_msg = await client.send_message(message.chat.id, f"🗣️ **Generating Audio 1 (Header) for {p_name}...**")
+                        token = get_public_token()
+                        await generate_cartesia_audio(hdr_text, hdr_wav, token)
+                        if os.path.exists(hdr_wav): await client.send_audio(chat_id=message.chat.id, audio=hdr_wav, caption=f"🔊 **{p_name} Header Audio**")
+                        await status_msg.delete()
+                        
+                    if nums_text:
+                        status_msg = await client.send_message(message.chat.id, f"🗣️ **Generating Audio 2 (Numbers) for {p_name}...**")
+                        token = get_public_token()
+                        await generate_cartesia_audio(nums_text, nums_wav, token)
+                        if os.path.exists(nums_wav): await client.send_audio(chat_id=message.chat.id, audio=nums_wav, caption=f"🔊 **{p_name} Numbers Audio**")
                         await status_msg.delete()
 
                     status_msg = await client.send_message(message.chat.id, f"🎬 **Rendering {p_name} Video...**")
-                    out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
+                    full_heading = prize_headings.get(p_name, p_name)
                     
-                    if engine == "intro": await asyncio.to_thread(intro.generate_video, out_path)
-                    else:
-                        full_heading = prize_headings.get(p_name, p_name)
-                        if engine == "bang": await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur)
-                        else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay)
+                    if engine == "bang": await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur, hdr_wav, nums_wav)
+                    else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay, hdr_wav, nums_wav)
                     
                     video_files.append(out_path)
                     if not UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE:
@@ -1315,4 +1248,3 @@ start_bot_thread()
 
 st.title("Kerala Lottery Video Engine 🎬")
 st.write("Bot is running. Powered by strict synchronous CV2 writing and ThreadPool Executor.")
-
