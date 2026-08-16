@@ -13,6 +13,7 @@ import numpy as np
 import cv2
 import subprocess
 import collections
+import shutil
 from datetime import datetime
 from bs4 import BeautifulSoup
 from pyrogram import Client, filters
@@ -35,6 +36,8 @@ except ImportError:
 # ==========================================
 # --- USER CONFIGURATION BLOCK ---
 # ==========================================
+
+TARGET_CHANNEL_ID = -1003889675767
 
 UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE = False
 
@@ -130,6 +133,23 @@ def get_audio_duration(audio_path):
             return float(res.stdout.strip())
         except Exception:
             return 0.0
+
+def get_video_duration(video_path):
+    if not os.path.exists(video_path): return 0.0
+    res = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+        stdout=subprocess.PIPE, text=True
+    )
+    try:
+        return float(res.stdout.strip())
+    except Exception:
+        return 0.0
+
+def format_timestamp(seconds):
+    s = int(round(seconds))
+    m = s // 60
+    sec = s % 60
+    return f"{m:02d}:{sec:02d}"
 
 # ==========================================
 # PYTHON AUDIO SYNTHESIZERS
@@ -327,7 +347,6 @@ def to_tts_format(ticket_str: str) -> str:
         return ticket_clean
 
 def get_malayalam_prize_money(amount_str):
-    # Strip brackets, parentheses, and letters to avoid suffix digits (e.g., [1 CRORE])
     clean_str = re.sub(r'\[.*?\]|\(.*?\)', '', str(amount_str))
     clean_num = re.sub(r'[^\d]', '', clean_str)
     if not clean_num: return ""
@@ -569,7 +588,8 @@ def parse_lottery_result_page(target_url: str):
             "6th Prize": "ആറാം", "7th Prize": "ഏഴാം", "8th Prize": "എട്ടാം", "9th Prize": "ഒമ്പതാം"
         }
         
-        two_step_prizes = ["1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "5th Prize"]
+        # Read numbers only for 1st, 2nd, 3rd, and 5th Prizes (Consolation prize reads only money header)
+        two_step_prizes = ["1st Prize", "2nd Prize", "3rd Prize", "5th Prize"]
         tts_file_blocks = [f"[Intro Header]\n{dynamic_intro}"]
 
         for p_key in prize_headers:
@@ -622,7 +642,243 @@ def parse_lottery_result_page(target_url: str):
         return None, None, {}, None, {}, {}, None
 
 # ==========================================
-# 2. UTILITIES & BACKGROUND PRE-RENDERER
+# 2. YOUTUBE METADATA & TIMESTAMPS GENERATOR
+# ==========================================
+def generate_youtube_package(lottery_title, draw_date, video_durations_map):
+    # Parse lottery name and code
+    code_match = re.search(r'([A-Z]{1,3}[-\s]*\d{1,4})', lottery_title)
+    if code_match:
+        code_str = code_match.group(1).replace(" ", "-").upper()
+        name_str = lottery_title.replace(code_match.group(0), "").strip()
+    else:
+        code_str = "DL-65"
+        name_str = lottery_title.strip()
+
+    name_clean = re.sub(r'[^A-Z0-9]', '', name_str.upper())
+    code_clean = re.sub(r'[^A-Z0-9]', '_', code_str.upper())
+
+    # Date formatting
+    try:
+        d = datetime.strptime(draw_date, "%d-%m-%Y")
+        date_dot = d.strftime("%d.%m.%Y")
+        date_slash = d.strftime("%d/%m/%Y")
+        date_dash = d.strftime("%d-%m-%Y")
+        date_short = f"{d.day}.{d.month}.{str(d.year)[2:]}"
+        date_und = d.strftime("%d_%m_%Y")
+    except Exception:
+        date_dot = draw_date.replace("-", ".")
+        date_slash = draw_date.replace("-", "/")
+        date_dash = draw_date
+        date_short = draw_date
+        date_und = draw_date.replace("-", "_")
+
+    # Dynamic Timestamps Calculation
+    tier_order = [
+        ("Intro", "Intro & Live Broadcast"),
+        ("1st Prize", "1st Prize"),
+        ("Consolation Prize", "Consolation Prize"),
+        ("2nd Prize", "2nd Prize"),
+        ("3rd Prize", "3rd Prize"),
+        ("4th Prize", "4th Prize"),
+        ("5th Prize", "5th Prize"),
+        ("6th Prize", "6th Prize"),
+        ("7th Prize", "7th Prize"),
+        ("8th Prize", "8th Prize"),
+        ("9th Prize", "9th Prize")
+    ]
+
+    timestamps_lines = []
+    current_time = 0.0
+
+    for key, label in tier_order:
+        ts_str = format_timestamp(current_time)
+        timestamps_lines.append(f"{ts_str} - {label}")
+        dur = video_durations_map.get(key, 0.0)
+        current_time += dur
+
+    # Append future sync point for combined 7, 8, 9th Prize numbers
+    if current_time > 0:
+        ts_789 = format_timestamp(current_time)
+        timestamps_lines.append(f"{ts_789} - 7th, 8th & 9th Prize Numbers")
+
+    timestamps_text = "\n".join(timestamps_lines)
+
+    title_1 = f"KERALA LOTTERY {name_str} {code_str}| LIVE LOTTERY RESULT TODAY {date_dot}| KERALA LOTTERY LIVE RESULT|"
+    title_2 = f"KERALA {name_str} {code_str} KERALA LOTTERY RESULT {date_short} | LIVE KERALA LOTTERY RESULT TODAY."
+
+    description = f"""{title_1}
+#{name_clean} #{code_clean} #{date_und} #KeralaLotteryLiveResult #KeralaLottery
+
+⏱️ TIMESTAMPS:
+{timestamps_text}
+
+📲 Join our FREE WhatsApp Channel for Instant PDF Updates & Weekly Analysis (Link in About Section / Description)!
+
+Query Solved.
+kerala lottery result
+Kerala lottery result live
+kerala lottery result live today
+Kerala Lottery Result Today
+kerala lottery results
+Kerala lottery today result
+live kerala lottery today result
+lottery result
+Lottery results
+lottery results today
+today lottery
+today lottery result
+
+#KeralaLotteryLiveResult
+#{name_clean}
+#{name_clean}_{date_slash}
+#{name_clean.lower()}_{code_str.lower()}_{date_dash}
+#keralalotteryresult
+#lotteryresult
+#lotteryliveresult
+#{name_clean}_result
+#{name_clean}_liveresult
+
+{name_str.lower()} kerala lottery live result
+{name_str} kerala lottery result
+kerala lottery live result {name_str.lower()}
+kerala lottery result {name_str}
+
+{name_str} live today
+{name_str} {date_slash} live today
+
+Kerala Lottery Result Today {name_str}
+Kerala Lottery Result Today {name_str} {code_str}
+Kerala Lottery Result Today {name_str} {date_slash}
+
+kerala lottery results {name_str}
+kerala lottery results {name_str} {code_str}
+kerala lottery results {name_str} {date_slash}
+
+{name_str} live today
+{name_str} {code_str} live today
+{name_str} {date_slash} live today
+
+Keralalotteries.com {name_str}
+Keralalotteries.com {name_str} {code_str}
+Keralalotteries.com {name_str} {date_slash}
+
+live kerala lottery result {name_str}
+live kerala lottery result {name_str} {code_str}
+live kerala lottery result {name_str} {date_slash}
+
+{name_str} kerala lottery
+{name_str} {date_slash} kerala lottery
+{name_str} kerala lottery result
+{name_str} {code_str} kerala lottery result
+{name_str} {date_slash} kerala lottery result
+
+{name_str} lottery result
+{name_str} {date_slash} lottery result
+
+today kerala lottery
+today kerala result
+today result kerala
+result today kerala lottery
+today lottery
+lottery today
+kerala lottery today
+
+_{name_clean}_{date_slash}
+_{date_slash}_{name_clean}
+
+{code_str.lower()}_{name_clean.lower()}_{date_dash}
+{code_str.lower()}_{date_dash}_{name_clean.lower()}
+
+{name_clean}_{date_slash}
+{name_clean}_{date_dot}_
+{date_slash}_{name_clean}_
+{date_dot}_{name_clean}
+
+{name_str} today live result
+{name_str} kerala today live result
+{name_str} live result kerala
+{name_str} kerala lottery
+
+today live result
+kerala today live result
+live result kerala
+kerala lottery
+
+{date_slash} today live result
+{date_slash} kerala today live result
+{date_slash} live result kerala
+{date_slash} kerala lottery
+
+{date_dot} Kerala Lottery Result
+kerala lottery result
+Kerala Lottery Result {date_dot}
+Kerala Lottery Result {date_short}
+Kerala lottery result live
+kerala lottery result live today
+Kerala Lottery Result Today
+
+Kerala Lottery Result {code_str}
+Kerala Lottery Result {code_clean}
+kerala lottery result {name_str}
+Kerala Lottery Result {name_str.lower()} {code_str}
+Kerala Lottery Result {name_str.lower()} {code_clean}
+kerala lottery result {name_str}
+Kerala Lottery Result {name_str} {code_str}
+Kerala Lottery Result {name_str} {code_clean}
+
+{code_str}
+{code_str} Kerala Lottery Result
+{code_str} {name_str.lower()}
+{code_str} {name_str}
+{code_clean}
+{code_clean} Kerala Lottery Result
+{code_clean} {name_str.lower()}
+{code_clean} {name_str}
+{name_str.lower()}
+{name_str.lower()} kerala lottery result
+{name_str.lower()} {code_str}
+{name_str.lower()} {code_str} Kerala Lottery Result
+{name_str.lower()} {code_clean}
+{name_str.lower()} {code_clean} Kerala Lottery Result
+{name_str}
+{name_str} kerala lottery result
+{name_str} {code_str}
+{name_str} {code_str} Kerala Lottery Result
+{name_str} {code_clean}
+{name_str} {code_clean} Kerala Lottery Result
+
+Disclaimer:-
+Copyright Disclaimer Under Section 107 of the Copyright Act 1976 allowance is made for "fair use" for purposes such as criticism comment news reporting teaching scholarship and research. Fair use is a use permitted by copyright statute that might otherwise be infringing. Non-profit educational or personal use tips the balance in favor of fair use.
+
+There Was Not Sell Lottery Tickets and Any illegal Products There Was Play Only New Updates about Government Lotteries And Winners Details of Paper Lottery.
+
+Information given in the video is only for Educational Purposes. Viewers should do their own research before playing or investing anything. Also please check lottery rules in your country and state before purchasing as we are not promoting anything.
+
+The prize winners are advised to verify the winning numbers with the results published in the Kerala Government Gazette."""
+
+    tags = f"kerala lottery result live, live kerala lottery result, kerala lottery result, kerala lottery result today, kerala lottery today result, kerala lottery, lottery result today, today lottery result, today's lottery results, {name_str}, {name_str} lottery result, {name_str} result, {name_str} lottery {code_str}, {date_short} lottery result"
+
+    return title_1, title_2, description, tags
+
+async def broadcast_to_channel(client, text=None, video_path=None, audio_path=None, document=None, caption=""):
+    if not TARGET_CHANNEL_ID: return
+    try:
+        if text:
+            chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            for chunk in chunks:
+                await client.send_message(TARGET_CHANNEL_ID, chunk)
+                await asyncio.sleep(0.4)
+        elif video_path and os.path.exists(video_path):
+            await client.send_video(TARGET_CHANNEL_ID, video=video_path, caption=caption)
+        elif audio_path and os.path.exists(audio_path):
+            await client.send_audio(TARGET_CHANNEL_ID, audio=audio_path, caption=caption)
+        elif document:
+            await client.send_document(TARGET_CHANNEL_ID, document=document, caption=caption)
+    except Exception as e:
+        GLOBAL_STATE.log(f"Channel Broadcast Error: {e}")
+
+# ==========================================
+# 3. UTILITIES & BACKGROUND PRE-RENDERER
 # ==========================================
 def ease_out_expo(x): return 1 if x == 1 else 1 - math.pow(2, -10 * x)
 def ease_in_out_cubic(x): return 4 * x**3 if x < 0.5 else 1 - math.pow(-2 * x + 2, 3) / 2
@@ -801,7 +1057,7 @@ def pre_render_grid_card(text, is_small=False):
     return layer
 
 # ==========================================
-# 3. VIDEO RENDERING ENGINES
+# 4. VIDEO RENDERING ENGINES
 # ==========================================
 def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_dur, impact_time_override=None, progress_cb=None):
     audio_file = out_path.replace(".mp4", ".wav")
@@ -1059,12 +1315,11 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     if os.path.exists(raw_path): os.remove(raw_path)
 
 # ==========================================
-# 4. BOT PIPELINE & FFMPEG STITCHING (FILTER_COMPLEX)
+# 5. BOT PIPELINE & FFMPEG STITCHING (FILTER_COMPLEX)
 # ==========================================
 def compress_and_combine(video_files, final_output):
     if not video_files: return
     if len(video_files) == 1:
-        import shutil
         shutil.copy(video_files[0], final_output)
         return
 
@@ -1100,6 +1355,9 @@ async def execute_result_pipeline(app, chat_id, target_url):
         await app.send_message(chat_id, chunk)
         await asyncio.sleep(0.4)
 
+    # Broadcast scraped text result to Channel
+    await broadcast_to_channel(app, text=text_msg)
+
     if tts_txt and tts_txt.strip():
         tts_file = io.BytesIO(tts_txt.encode('utf-8'))
         tts_file.name = f"TTS_{draw_date}.txt"
@@ -1108,6 +1366,10 @@ async def execute_result_pipeline(app, chat_id, target_url):
             document=tts_file,
             caption=f"🗣️ **Malayalam Pronunciation File for TTS**\n📅 `{draw_date}`"
         )
+        
+        # Broadcast TTS file to Channel
+        tts_file.seek(0)
+        await broadcast_to_channel(app, document=tts_file, caption=f"🗣️ **Malayalam TTS Script** • `{draw_date}`")
         await asyncio.sleep(0.4)
 
     keyboard = InlineKeyboardMarkup([
@@ -1121,7 +1383,7 @@ async def execute_result_pipeline(app, chat_id, target_url):
 USER_VIDEOS = {}
 
 # ==========================================
-# 5. ASYNC PYROFORK BOT
+# 6. ASYNC PYROFORK BOT
 # ==========================================
 async def run_pyrofork_bot():
     GLOBAL_STATE.main_event_loop = asyncio.get_running_loop()
@@ -1225,6 +1487,7 @@ async def run_pyrofork_bot():
 
                     if os.path.exists(audio_path):
                         await client.send_audio(chat_id=chat_id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n📅 `{draw_date}`")
+                        await broadcast_to_channel(client, audio_path=audio_path, caption=f"🔊 **{p_name} Voiceover**\n📅 `{draw_date}`")
                 except Exception as e:
                     GLOBAL_STATE.log(f"Audio error on {p_name}: {e}")
                 finally:
@@ -1263,6 +1526,7 @@ async def run_pyrofork_bot():
                 if os.path.exists(out_path):
                     await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
                     await client.send_video(chat_id=chat_id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
+                    await broadcast_to_channel(client, video_path=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
             except Exception as e:
                 GLOBAL_STATE.log(f"Video render error for {p_name}: {e}")
             finally:
@@ -1301,6 +1565,7 @@ async def run_pyrofork_bot():
             ]
 
             video_files = []
+            video_durations_map = {}
             tiers_to_render = [tier_config[tier_idx]] if action == "rs" else tier_config[:tier_idx + 1]
             await callback_query.message.delete()
 
@@ -1313,6 +1578,19 @@ async def run_pyrofork_bot():
                     )
                     if vid_out:
                         video_files.append(vid_out)
+                        video_durations_map[p_name] = get_video_duration(vid_out)
+
+            # Generate and Send YouTube Metadata Package
+            title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map)
+            
+            yt_msg = (
+                f"🏷️ **YOUTUBE TITLES:**\n`{title_1}`\n\n`{title_2}`\n\n"
+                f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS:**\n```text\n{yt_desc}\n```\n\n"
+                f"🏷️ **YOUTUBE TAGS:**\n`{yt_tags}`"
+            )
+            
+            await client.send_message(callback_query.message.chat.id, yt_msg)
+            await broadcast_to_channel(client, text=yt_msg)
 
             if action == "ru" and len(video_files) > 1:
                 GLOBAL_STATE.set_status("Final Stitching", 0.95, f"Combining {len(video_files)} video segments...")
@@ -1320,6 +1598,7 @@ async def run_pyrofork_bot():
                 await asyncio.to_thread(compress_and_combine, video_files, FINAL_OUTPUT_VIDEO)
                 await status_msg.edit_text("🚀 **Uploading final combined video...**")
                 await client.send_video(chat_id=callback_query.message.chat.id, video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Final Combined Broadcast**\n📅 `{draw_date}`")
+                await broadcast_to_channel(client, video_path=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Final Combined Broadcast**\n📅 `{draw_date}`")
                 await status_msg.delete()
                 if os.path.exists(FINAL_OUTPUT_VIDEO): os.remove(FINAL_OUTPUT_VIDEO)
                 GLOBAL_STATE.set_status("Idle", 1.0, "Ready")
@@ -1374,6 +1653,7 @@ async def run_pyrofork_bot():
             ]
 
             video_files = []
+            video_durations_map = {}
             for p_name, engine, dur, is_4c, theme, end_delay in tier_config[start_idx : end_idx + 1]:
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
                     tts_entry = tts_dict.get(p_name)
@@ -1383,12 +1663,26 @@ async def run_pyrofork_bot():
                     )
                     if vid_out:
                         video_files.append(vid_out)
+                        video_durations_map[p_name] = get_video_duration(vid_out)
+
+            # Generate and Send YouTube Metadata Package
+            title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map)
+            
+            yt_msg = (
+                f"🏷️ **YOUTUBE TITLES:**\n`{title_1}`\n\n`{title_2}`\n\n"
+                f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS:**\n```text\n{yt_desc}\n```\n\n"
+                f"🏷️ **YOUTUBE TAGS:**\n`{yt_tags}`"
+            )
+            
+            await client.send_message(message.chat.id, yt_msg)
+            await broadcast_to_channel(client, text=yt_msg)
 
             if len(video_files) > 1:
                 status_msg = await client.send_message(message.chat.id, "🗜️ **Combining custom range...**")
                 await asyncio.to_thread(compress_and_combine, video_files, FINAL_OUTPUT_VIDEO)
                 await status_msg.edit_text("🚀 **Uploading combined sequence...**")
                 await client.send_video(chat_id=message.chat.id, video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Range ({text})**\n📅 `{draw_date}`")
+                await broadcast_to_channel(client, video_path=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Range ({text})**\n📅 `{draw_date}`")
                 await status_msg.delete()
                 if os.path.exists(FINAL_OUTPUT_VIDEO): os.remove(FINAL_OUTPUT_VIDEO)
 
@@ -1411,6 +1705,7 @@ async def run_pyrofork_bot():
             await asyncio.to_thread(compress_and_combine, USER_VIDEOS[chat_id], out_path)
             await status.edit_text("🚀 **Uploading...**")
             await client.send_video(chat_id, out_path)
+            await broadcast_to_channel(client, video_path=out_path, caption="🎟️ **Manual Stitched Video**")
             await status.delete()
             if os.path.exists(out_path): os.remove(out_path)
             USER_VIDEOS[chat_id] = []
@@ -1424,7 +1719,7 @@ async def run_pyrofork_bot():
         if 'app' in locals() and app.is_initialized: await app.stop()
 
 # ==========================================
-# 6. STREAMLIT DASHBOARD & LIVE TELEMETRY
+# 7. STREAMLIT DASHBOARD & LIVE TELEMETRY
 # ==========================================
 @st.cache_resource
 def start_bot_thread():
