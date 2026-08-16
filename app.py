@@ -347,6 +347,7 @@ def to_tts_format(ticket_str: str) -> str:
         return ticket_clean
 
 def get_malayalam_prize_money(amount_str):
+    # Strip brackets, parentheses, and text to eliminate unwanted appended numbers
     clean_str = re.sub(r'\[.*?\]|\(.*?\)', '', str(amount_str))
     clean_num = re.sub(r'[^\d]', '', clean_str)
     if not clean_num: return ""
@@ -449,7 +450,7 @@ def concat_wav_files(file1, file2, out_file):
         return False
 
 # ==========================================
-# 1. SCRAPING LOGIC
+# 1. SCRAPING LOGIC (UNIVERSAL ALL-DAYS PARSER)
 # ==========================================
 def fetch_last_10_draws():
     base_url = "https://www.keralalotteries.net/?m=1"
@@ -457,17 +458,21 @@ def fetch_last_10_draws():
     try:
         res = http_get(base_url)
         soup = BeautifulSoup(res.text, 'html.parser')
-        for row in soup.find_all('tr'):
-            tds = row.find_all('td')
-            if len(tds) >= 2:
-                a_tag = row.find('a', href=True)
-                date_match = re.search(r'\d{2}-\d{2}-\d{4}', row.get_text())
-                if date_match and a_tag:
-                    d_str = date_match.group(0)
-                    title = tds[1].get_text(strip=True).replace('\n', ' ')
-                    title = re.sub(r'\s*Official Result$', '', title, flags=re.IGNORECASE)
-                    if not any(d['date'] == d_str for d in draws):
-                        draws.append({'date': d_str, 'title': title, 'url': a_tag['href']})
+        
+        # Search across all table rows, articles, and blog cards
+        for row in soup.find_all(['tr', 'article', 'div']):
+            a_tag = row.find('a', href=True)
+            text = row.get_text(separator=' ')
+            # Universal date regex supporting '/', '-', and '.' separators
+            date_match = re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', text)
+            if date_match and a_tag and a_tag.get('href', '').endswith('.html'):
+                d_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
+                raw_title = a_tag.get_text(strip=True) or row.get_text(strip=True)
+                raw_title = re.sub(r'(?i)\b(?:official result|results? today|live)\b', '', raw_title)
+                raw_title = re.sub(r'\s+', ' ', raw_title).strip()
+                
+                if not any(d['date'] == d_str for d in draws):
+                    draws.append({'date': d_str, 'title': raw_title, 'url': a_tag['href']})
             if len(draws) >= 10: break
         return draws
     except Exception as e:
@@ -496,16 +501,28 @@ def parse_lottery_result_page(target_url: str):
 
         h1_tag = soup.find('h1', class_='entry-title')
         raw_title = h1_tag.get_text(strip=True) if h1_tag else "KERALA LOTTERY"
-        blacklist_regex = r'(?i)\b(?:KERALA|LOTTERIES|LOTTERY|RESULTS?|TODAY|OFFICIAL|LIVE)\b|\d{2}[/-]\d{2}[/-]\d{4}|:'
+        blacklist_regex = r'(?i)\b(?:KERALA|LOTTERIES|LOTTERY|RESULTS?|TODAY|OFFICIAL|LIVE)\b|\d{2}[/.-]\d{2}[/.-]\d{4}|:'
         clean_lottery_title = re.sub(blacklist_regex, '', raw_title)
         clean_lottery_title = re.sub(r'\s+', ' ', clean_lottery_title).strip().upper()
 
         for tag in post_body.find_all(['br', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li', 'table']):
             tag.insert_after('\n')
         
-        full_text = post_body.get_text(separator=' ')
+        # Replace all non-breaking spaces before line processing
+        full_text = post_body.get_text(separator=' ').replace('\xa0', ' ')
         lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
 
+        # Universal multi-source Date Extraction (checks Target URL, H1 Title, and Post Body)
+        date_match = re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', target_url) or \
+                     re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', raw_title) or \
+                     re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', full_text)
+        
+        if date_match:
+            draw_date = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
+        else:
+            draw_date = "N/A"
+
+        # Native Malayalam Series Name Extraction
         malayalam_name_series = clean_lottery_title
         for i, line in enumerate(lines):
             if 'തത്സമയ നറുക്കെടുപ്പ്' in line and 'റിസൾട്ട്' in line:
@@ -520,9 +537,6 @@ def parse_lottery_result_page(target_url: str):
                 potential_name = re.sub(r'[\.\-]', ' ', potential_name)
                 malayalam_name_series = re.sub(r'\s+', ' ', potential_name).strip()
                 break
-
-        date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', full_text)
-        draw_date = date_match.group(1).replace('/', '-') if date_match else "N/A"
 
         series_match = re.search(r'Today Lottery Series:\s*([A-Z0-9,\s]+)', full_text)
         series_str = series_match.group(1).strip() if series_match else "N/A"
@@ -553,11 +567,21 @@ def parse_lottery_result_page(target_url: str):
 
             if current_prize_key:
                 if (line.startswith("(") and line.endswith(")")) or line in ["...", "---"]: continue
-                if current_prize_key in ["1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize"]:
-                    if re.search(r'^[A-Za-z]{2}\s*\d{6}', line): prizes_data[current_prize_key].append(line)
+                
+                # Capture 1st, 2nd, and 3rd Prize winning tickets with districts
+                if current_prize_key in ["1st Prize", "2nd Prize", "3rd Prize"]:
+                    ticket_match = re.search(r'([A-Za-z]{2}\s*\d{6}(?:\s*\([A-Za-z\s]+\))?)', line)
+                    if ticket_match:
+                        prizes_data[current_prize_key].append(ticket_match.group(1).strip())
+                elif current_prize_key == "Consolation Prize":
+                    cons_tickets = re.findall(r'\b[A-Za-z]{2}\s*\d{6}\b', line)
+                    if cons_tickets:
+                        prizes_data[current_prize_key].extend(cons_tickets)
                 else:
+                    # 4th through 9th Prizes: 4-digit numbers
                     four_digits = re.findall(r'\b\d{4}\b', line)
-                    if four_digits: prizes_data[current_prize_key].extend(four_digits)
+                    if four_digits:
+                        prizes_data[current_prize_key].extend(four_digits)
 
         msg_output = [f"🎟️ **{clean_lottery_title}**", f"📅 **Date:** `{draw_date}`", f"🔢 **Series:** `{series_str}`", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"]
         prize_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣")]
@@ -588,7 +612,7 @@ def parse_lottery_result_page(target_url: str):
             "6th Prize": "ആറാം", "7th Prize": "ഏഴാം", "8th Prize": "എട്ടാം", "9th Prize": "ഒമ്പതാം"
         }
         
-        # Read numbers only for 1st, 2nd, 3rd, and 5th Prizes (Consolation prize reads only money header)
+        # Read numbers only for 1st, 2nd, 3rd, and 5th Prizes (Consolation reads only money header)
         two_step_prizes = ["1st Prize", "2nd Prize", "3rd Prize", "5th Prize"]
         tts_file_blocks = [f"[Intro Header]\n{dynamic_intro}"]
 
@@ -645,8 +669,7 @@ def parse_lottery_result_page(target_url: str):
 # 2. YOUTUBE METADATA & TIMESTAMPS GENERATOR
 # ==========================================
 def generate_youtube_package(lottery_title, draw_date, video_durations_map):
-    # Parse lottery name and code
-    code_match = re.search(r'([A-Z]{1,3}[-\s]*\d{1,4})', lottery_title)
+    code_match = re.search(r'([A-Za-z]{1,3}[-\s]*\d{1,4})', lottery_title)
     if code_match:
         code_str = code_match.group(1).replace(" ", "-").upper()
         name_str = lottery_title.replace(code_match.group(0), "").strip()
@@ -657,7 +680,6 @@ def generate_youtube_package(lottery_title, draw_date, video_durations_map):
     name_clean = re.sub(r'[^A-Z0-9]', '', name_str.upper())
     code_clean = re.sub(r'[^A-Z0-9]', '_', code_str.upper())
 
-    # Date formatting
     try:
         d = datetime.strptime(draw_date, "%d-%m-%Y")
         date_dot = d.strftime("%d.%m.%Y")
@@ -672,7 +694,6 @@ def generate_youtube_package(lottery_title, draw_date, video_durations_map):
         date_short = draw_date
         date_und = draw_date.replace("-", "_")
 
-    # Dynamic Timestamps Calculation
     tier_order = [
         ("Intro", "Intro & Live Broadcast"),
         ("1st Prize", "1st Prize"),
@@ -696,7 +717,6 @@ def generate_youtube_package(lottery_title, draw_date, video_durations_map):
         dur = video_durations_map.get(key, 0.0)
         current_time += dur
 
-    # Append future sync point for combined 7, 8, 9th Prize numbers
     if current_time > 0:
         ts_789 = format_timestamp(current_time)
         timestamps_lines.append(f"{ts_789} - 7th, 8th & 9th Prize Numbers")
