@@ -12,7 +12,7 @@ import array
 import numpy as np
 import cv2
 import subprocess
-import concurrent.futures
+import collections
 from datetime import datetime
 from bs4 import BeautifulSoup
 from pyrogram import Client, filters
@@ -30,7 +30,7 @@ try:
     from indic_num2words import num2words
 except ImportError:
     num2words = None
-    print("**[WARNING]** indic_num2words not found. Please add it to requirements.txt")
+    print("**[WARNING]** indic_num2words not found. Using fallback dictionary.", flush=True)
 
 # ==========================================
 # --- USER CONFIGURATION BLOCK ---
@@ -72,6 +72,16 @@ SCROLL_AUDIO_BGM = os.path.join(DOWNLOAD_DIR, "calm_scroll_bgm.wav")
 FPS = 30
 WIDTH, HEIGHT = 1920, 1080
 
+# --- LIVE TELEMETRY LOG BUFFER ---
+LOG_HISTORY = collections.deque(maxlen=40)
+CURRENT_STATUS = {"task": "Idle", "progress": 0.0, "details": "Waiting for commands..."}
+
+def log_event(text: str):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    entry = f"[{timestamp}] {text}"
+    LOG_HISTORY.append(entry)
+    print(entry, flush=True)
+
 # --- FONT LOADER ---
 FONTS = {
     "hero": os.path.join(BASE_DIR, "Anton-Regular.ttf"),
@@ -94,14 +104,14 @@ def get_audio_duration(audio_path):
     try:
         with wave.open(audio_path, 'rb') as f:
             return f.getnframes() / float(f.getframerate())
-    except:
+    except Exception:
         res = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
             stdout=subprocess.PIPE, text=True
         )
         try:
             return float(res.stdout.strip())
-        except:
+        except Exception:
             return 0.0
 
 # ==========================================
@@ -109,7 +119,7 @@ def get_audio_duration(audio_path):
 # ==========================================
 def generate_cinematic_bang(file_path):
     if os.path.exists(file_path): return
-    print(f"**[LOG]** Synthesizing Cinematic Bang Audio to {file_path}...", flush=True)
+    log_event(f"Synthesizing Cinematic Bang Audio to {file_path}...")
     sample_rate = 44100
     duration = 4.5
     total_samples = int(sample_rate * duration)
@@ -159,7 +169,7 @@ def generate_cinematic_bang(file_path):
 
 def generate_calm_bgm(file_path, duration=90.0):
     if os.path.exists(file_path): return
-    print(f"**[LOG]** Synthesizing Calm Scroll Ambient Pad to {file_path}...", flush=True)
+    log_event(f"Synthesizing Calm Scroll Ambient Pad to {file_path}...")
     sample_rate = 44100
     total_samples = int(sample_rate * duration)
     
@@ -213,7 +223,7 @@ def http_get(url: str):
         return cffi_requests.get(url, impersonate="chrome", timeout=10)
     return standard_requests.get(url, headers=headers, timeout=10)
 
-# --- MALAYALAM TTS CONVERSION HELPERS ---
+# --- MALAYALAM NUMERAL & TTS CONVERSION HELPERS ---
 ALPHA_TO_ML = {
     'A': 'എ', 'B': 'ബി', 'C': 'സി', 'D': 'ഡി', 'E': 'ഇ', 'F': 'എഫ്',
     'G': 'ജി', 'H': 'എച്ച്', 'I': 'ഐ', 'J': 'ജെ', 'K': 'കെ', 'L': 'എൽ',
@@ -225,6 +235,29 @@ ALPHA_TO_ML = {
 DIGITS_TO_ML = {
     '0': 'പൂജ്യം', '1': 'ഒന്ന്', '2': 'രണ്ട്', '3': 'മൂന്ന്', '4': 'നാല്',
     '5': 'അഞ്ച്', '6': 'ആറ്', '7': 'ഏഴ്', '8': 'എട്ട്', '9': 'ഒമ്പത്'
+}
+
+FALLBACK_AMOUNTS = {
+    100000000: "പത്ത് കോടി",
+    80000000: "എട്ട് കോടി",
+    10000000: "ഒരു കോടി",
+    7500000: "എഴുപത്തിയഞ്ച് ലക്ഷം",
+    7000000: "എഴുപത് ലക്ഷം",
+    5000000: "അമ്പത് ലക്ഷം",
+    3000000: "മുപ്പത് ലക്ഷം",
+    1000000: "പത്ത് ലക്ഷം",
+    500000: "അഞ്ച് ലക്ഷം",
+    100000: "ഒരു ലക്ഷം",
+    50000: "അമ്പതിനായിരം",
+    25000: "ഇരുപത്തിയയ്യായിരം",
+    10000: "പതിനായിരം",
+    8000: "എണ്ണായിരം",
+    5000: "അയ്യായിരം",
+    2000: "രണ്ടായിരം",
+    1000: "ആയിരം",
+    500: "അഞ്ഞൂറ്",
+    200: "ഇരുന്നൂറ്",
+    100: "നൂറ്"
 }
 
 def to_tts_format(ticket_str: str) -> str:
@@ -247,10 +280,12 @@ def get_malayalam_prize_money(amount_str):
     if not clean_num: return ""
     try:
         val = int(clean_num)
+        if val in FALLBACK_AMOUNTS:
+            return FALLBACK_AMOUNTS[val]
         if num2words:
             return num2words(val, lang='ml')
         return str(val)
-    except:
+    except Exception:
         return clean_num
 
 # ==========================================
@@ -271,9 +306,10 @@ def get_public_token_sync():
             response = requests.get(url, headers=headers, timeout=8)
         if response.status_code == 200:
             data = response.json()
-            return data.get("token", data.get("access_token"))
+            tok = data.get("token", data.get("access_token"))
+            if tok: return tok
     except Exception as e:
-        print(f"❌ Failed to get public token: {e}", flush=True)
+        log_event(f"Token acquisition notice: {e}")
     return None
 
 async def get_public_token():
@@ -302,7 +338,7 @@ async def generate_cartesia_audio(text, output_filename, token=None, retries=3):
                 await ws.send(json.dumps(payload))
                 audio_buffer = bytearray()
                 while True:
-                    response_str = await ws.recv()
+                    response_str = await asyncio.wait_for(ws.recv(), timeout=12.0)
                     response = json.loads(response_str)
                     if response.get("type") == "chunk":
                         audio_buffer.extend(base64.b64decode(response["data"]))
@@ -314,11 +350,11 @@ async def generate_cartesia_audio(text, output_filename, token=None, retries=3):
                             wav_file.writeframes(audio_buffer)
                         return True
                     elif response.get("type") == "error":
-                        print(f"❌ Cartesia Error: {response.get('error')}", flush=True)
+                        log_event(f"Cartesia Error: {response.get('error')}")
                         break
         except Exception as e:
-            print(f"❌ Cartesia Connection Error (Attempt {attempt+1}/{retries}): {e}", flush=True)
-            token = None  # Force re-fetching token on retry
+            log_event(f"Cartesia WebSocket (Attempt {attempt+1}/{retries}): {e}")
+            token = None
             await asyncio.sleep(1.5)
     return False
 
@@ -332,7 +368,7 @@ def concat_wav_files(file1, file2, out_file):
             out_w.writeframes(data)
         return True
     except Exception as e:
-        print(f"❌ Error concatenating wavs: {e}", flush=True)
+        log_event(f"Audio Concat Notice: {e}")
         return False
 
 # ==========================================
@@ -358,7 +394,7 @@ def fetch_last_10_draws():
             if len(draws) >= 10: break
         return draws
     except Exception as e:
-        print(f"**[LOG]** Error fetching draws: {e}", flush=True)
+        log_event(f"Error fetching draws: {e}")
         return []
 
 def clean_prize_heading(raw_str):
@@ -393,7 +429,6 @@ def parse_lottery_result_page(target_url: str):
         full_text = post_body.get_text(separator=' ')
         lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
 
-        # Native Malayalam Name & Series Extraction Hook
         malayalam_name_series = clean_lottery_title
         for i, line in enumerate(lines):
             if 'തത്സമയ നറുക്കെടുപ്പ്' in line and 'റിസൾട്ട്' in line:
@@ -455,10 +490,10 @@ def parse_lottery_result_page(target_url: str):
                 formatted_val = "  ".join(prizes_data[p_key]) if "Prize" in p_key and "1st" not in p_key and "2nd" not in p_key and "3rd" not in p_key and "Consolation" not in p_key else "\n".join(prizes_data[p_key])
                 msg_output.append(f"{emoji} **{prize_headings.get(p_key, p_key)}**\n`{formatted_val}`\n")
 
-        # --- TTS GENERATION BLOCK ---
+        # --- PURE MALAYALAM TTS GENERATION ---
         tts_output = {}
         
-        ml_months = {1: "ആഗസ്റ്റ്", 2: "ഫെബ്രുവരി", 3: "മാർച്ച്", 4: "ഏപ്രിൽ", 5: "മെയ്", 6: "ജൂൺ", 7: "ജൂലൈ", 8: "ആഗസ്റ്റ്", 9: "സെപ്റ്റംബർ", 10: "ഒക്ടോബർ", 11: "നവംബർ", 12: "ഡിസംബർ"}
+        ml_months = {1: "ജനുവരി", 2: "ഫെബ്രുവരി", 3: "മാർച്ച്", 4: "ഏപ്രിൽ", 5: "മെയ്", 6: "ജൂൺ", 7: "ജൂലൈ", 8: "ആഗസ്റ്റ്", 9: "സെപ്റ്റംബർ", 10: "ഒക്ടോബർ", 11: "നവംബർ", 12: "ഡിസംബർ"}
         ml_weekdays = {0: "തിങ്കളാഴ്ച", 1: "ചൊവ്വാഴ്ച", 2: "ബുധനാഴ്ച", 3: "വ്യാഴാഴ്ച", 4: "വെള്ളിയാഴ്ച", 5: "ശനിയാഴ്ച", 6: "ഞായറാഴ്ച"}
         
         try:
@@ -468,7 +503,7 @@ def parse_lottery_result_page(target_url: str):
             d_sp = "ഒന്നാം" if d.day == 1 else "രണ്ടാം" if d.day == 2 else f"{get_malayalam_prize_money(str(d.day))} ആം"
             w_sp = ml_weekdays.get(d.weekday(), "")
             dynamic_intro = f"ഇന്ന് {y_sp} {m_sp} മാസം {d_sp} തീയതി {w_sp} നടന്ന {malayalam_name_series} ലോട്ടറിയുടെ ഔദ്യോഗിക ഫലങ്ങളാണ് ഇപ്പോൾ പ്രഖ്യാപിക്കുന്നത്."
-        except:
+        except Exception:
             dynamic_intro = f"ഇന്ന് നടന്ന {malayalam_name_series} ലോട്ടറിയുടെ ഔദ്യോഗിക ഫലങ്ങളാണ് ഇപ്പോൾ പ്രഖ്യാപിക്കുന്നത്."
 
         tts_output["Intro"] = dynamic_intro
@@ -480,7 +515,6 @@ def parse_lottery_result_page(target_url: str):
         }
         
         two_step_prizes = ["1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "5th Prize"]
-
         tts_file_blocks = [f"[Intro Header]\n{dynamic_intro}"]
 
         for p_key in prize_headers:
@@ -517,7 +551,7 @@ def parse_lottery_result_page(target_url: str):
         return "\n".join(msg_output), tts_string, tts_output, draw_date, prizes_data, prize_headings, clean_lottery_title
 
     except Exception as e:
-        print(f"**[LOG]** Parsing Error: {e}", flush=True)
+        log_event(f"Parsing Error: {e}")
         return None, None, {}, None, {}, {}, None
 
 # ==========================================
@@ -660,31 +694,32 @@ def pre_render_ribbon_scroll(title_text):
     final.alpha_composite(layer)
     return final
 
-def pre_render_hero_text(text):
+# Lightweight bounded Hero Text Renderer (Bypasses 9600x5400 OOM crash)
+def pre_render_tight_hero_text(text):
     font = load_font("hero", 320)
-    layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-    cx, cy = WIDTH // 2, 570
-    bbox = draw.textbbox((cx, cy), text, font=font, anchor="mm")
-    text_y_start, text_height = max(0, int(bbox[1])), max(1, int(bbox[3] - bbox[1]))
+    temp_draw = ImageDraw.Draw(Image.new("RGBA", (1,1)))
+    bbox = temp_draw.textbbox((0, 0), text, font=font)
+    tw, th = max(10, bbox[2] - bbox[0] + 120), max(10, bbox[3] - bbox[1] + 120)
     
-    shadow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).text((cx, cy + 30), text, font=font, fill=(0, 0, 0, 240), anchor="mm")
-    layer.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(25)))
+    img = Image.new("RGBA", (tw, th), (0,0,0,0))
+    draw = ImageDraw.Draw(img)
+    cx, cy = tw // 2, th // 2
     
-    for i in range(18, 0, -1):
+    shadow = Image.new("RGBA", (tw, th), (0,0,0,0))
+    ImageDraw.Draw(shadow).text((cx, cy + 20), text, font=font, fill=(0, 0, 0, 240), anchor="mm")
+    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(15)))
+    
+    for i in range(12, 0, -1):
         draw.text((cx, cy + i), text, font=font, fill=(70, 15, 0, 255), anchor="mm")
         
-    mask = Image.new("L", (WIDTH, HEIGHT), 0)
+    mask = Image.new("L", (tw, th), 0)
     ImageDraw.Draw(mask).text((cx, cy), text, font=font, fill=255, anchor="mm")
     
     stops = [(0.0, (255, 255, 230)), (0.2, (255, 220, 0)), (0.7, (255, 160, 0)), (1.0, (180, 60, 0))]
-    grad = generate_vertical_gradient(WIDTH, text_height, stops)
-    grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    grad_layer.paste(grad, (0, text_y_start))
-    layer.paste(grad_layer, (0, 0), mask)
-    draw.text((cx, cy), text, font=font, fill=None, outline=(255, 240, 150, 255), stroke_width=4, anchor="mm")
-    return layer
+    grad = generate_vertical_gradient(tw, th, stops)
+    img.paste(grad, (0, 0), mask)
+    draw.text((cx, cy), text, font=font, fill=None, outline=(255, 240, 150, 255), stroke_width=3, anchor="mm")
+    return img
 
 def pre_render_grid_card(text, is_small=False):
     w, h = (385, 110) if is_small else (760, 160)
@@ -700,91 +735,16 @@ def pre_render_grid_card(text, is_small=False):
     return layer
 
 # ==========================================
-# 3. GLOBAL WORKER VARIABLES
+# 3. VIDEO RENDERING ENGINES (WITH LIVE TELEMETRY)
 # ==========================================
-MP_BG_ASSET = None
-MP_RIBBON_ASSET = None
-MP_SCROLL_MASK = None
-MP_BEAM_TEMPLATE = None
-MP_BIG_CARDS_LAYER = None
-MP_MATH_CACHE = []
-MP_LOTTERY_TITLE = ""
-
-def init_worker_assets(bg_asset, ribbon, scroll_mask, giant_canvas, math_cache, title):
-    global MP_BG_ASSET, MP_RIBBON_ASSET, MP_SCROLL_MASK, MP_BEAM_TEMPLATE, MP_BIG_CARDS_LAYER, MP_MATH_CACHE, MP_LOTTERY_TITLE
-    MP_BG_ASSET = bg_asset
-    MP_RIBBON_ASSET = ribbon
-    MP_SCROLL_MASK = scroll_mask
-    MP_BIG_CARDS_LAYER = giant_canvas
-    MP_MATH_CACHE = math_cache
-    MP_LOTTERY_TITLE = title
-    
-    bt = Image.new("RGBA", (800, HEIGHT), (0,0,0,0))
-    ImageDraw.Draw(bt).polygon([(500, 0), (700, 0), (200, HEIGHT), (0, HEIGHT)], fill=(255, 255, 255, 120))
-    MP_BEAM_TEMPLATE = bt.filter(ImageFilter.GaussianBlur(15))
-
-def mp_render_single_frame(frame_index):
-    m = MP_MATH_CACHE[frame_index]
-    canvas = MP_BG_ASSET.copy()
-    draw = ImageDraw.Draw(canvas)
-
-    if m['h_op'] > 0.05:
-        draw.text((WIDTH//2, m['hy_1']), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, int(255 * m['h_op'])), anchor="mm")
-        draw.text((WIDTH//2, m['hy_2']), MP_LOTTERY_TITLE, font=load_font("black", 68), fill=(255, 255, 255, int(255 * m['h_op'])), anchor="mm")
-
-    cards_layer = MP_BIG_CARDS_LAYER.crop((0, m['crop_y'], WIDTH, m['crop_y'] + HEIGHT))
-    cards_layer.putalpha(ImageChops.multiply(cards_layer.split()[3], MP_SCROLL_MASK))
-
-    if m['c_op'] < 1.0:
-        if m['c_op'] == 0.0:
-            cards_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-        else:
-            cards_layer.putalpha(cards_layer.split()[3].point(lambda p: p * m['c_op']))
-
-    beam_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-    beam_layer.paste(MP_BEAM_TEMPLATE, (m['beam_x'] - 350, 0))
-    masked_beam = beam_layer.copy()
-    masked_beam.putalpha(ImageChops.multiply(beam_layer.split()[3], cards_layer.split()[3]))
-    cards_layer.alpha_composite(masked_beam)
-    canvas.alpha_composite(cards_layer)
-
-    if m['badge_glitters'] or m['floating_glitters']:
-        g_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-        g_draw = ImageDraw.Draw(g_layer)
-        
-        for glitters in [m['badge_glitters'], m['floating_glitters']]:
-            for cx, cy, s, op in glitters:
-                g_draw.line([(cx-s, cy), (cx+s, cy)], fill=(255, 235, 100, op), width=3)
-                g_draw.line([(cx, cy-s), (cx, cy+s)], fill=(255, 235, 100, op), width=3)
-                g_draw.ellipse([cx-4, cy-4, cx+4, cy+4], fill=(255, 255, 255, op))
-                
-        canvas.alpha_composite(g_layer.filter(ImageFilter.GaussianBlur(3)))
-        canvas.alpha_composite(g_layer)
-
-    if m['r_op'] > 0.01:
-        if m['r_op'] < 1.0:
-            ribbon_fade = MP_RIBBON_ASSET.copy()
-            ribbon_fade.putalpha(ribbon_fade.split()[3].point(lambda p: p * m['r_op']))
-            canvas.alpha_composite(ribbon_fade)
-        else:
-            canvas.alpha_composite(MP_RIBBON_ASSET)
-
-    return cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR)
-
-# ==========================================
-# 4. VIDEO RENDERING ENGINES
-# ==========================================
-def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_dur, impact_time_override=None):
+def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_dur, impact_time_override=None, progress_cb=None):
     audio_file = out_path.replace(".mp4", ".wav")
     audio_dur = get_audio_duration(audio_file)
     
     calc_dur = max(audio_dur + 2.0 if audio_dur > 0 else base_dur, 6.0)
     total_frames = int(FPS * calc_dur)
     
-    if impact_time_override is not None and impact_time_override > 0:
-        impact_time = impact_time_override
-    else:
-        impact_time = 1.0 if audio_dur == 0 else min(2.5, audio_dur * 0.4)
+    impact_time = impact_time_override if (impact_time_override and impact_time_override > 0) else (1.0 if audio_dur == 0 else min(2.5, audio_dur * 0.4))
     
     bg_asset = pre_render_background(theme)
     
@@ -795,8 +755,8 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         district = dist_match.group(1).upper()
         ticket_num = item.replace(dist_match.group(0), "").strip()
 
-    hero_asset = pre_render_hero_text(ticket_num)
-    hero_alpha_mask = hero_asset.split()[3]
+    hero_asset = pre_render_tight_hero_text(ticket_num)
+    orig_tw, orig_th = hero_asset.size
     ribbon_asset = pre_render_ribbon_bang(prize_heading)
     glass_asset = pre_render_glass_card(district)
     
@@ -839,12 +799,7 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
                 draw.text((WIDTH//2, int(165 - (30 * (1 - op)))), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, int(255*op)), anchor="mm")
 
         if time_sec > 0.2:
-            scale = ease_out_back_extreme(min((time_sec - 0.2) / 0.4, 1.0))
-            if scale > 0.01:
-                w = max(int(WIDTH * scale), 1)
-                temp = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-                temp.paste(ribbon_asset.resize((w, HEIGHT), Image.Resampling.LANCZOS), (int((WIDTH - w) // 2), 0))
-                canvas.alpha_composite(temp)
+            canvas.alpha_composite(ribbon_asset)
 
         shake_dx, shake_dy = 0, 0
         if time_sec > (impact_time - 0.2):
@@ -854,23 +809,22 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
             canvas.alpha_composite(temp)
 
             hp = min((time_sec - (impact_time - 0.2)) / 0.2, 1.0)
-            scale = 5.0 - (ease_out_expo(hp) * 4.0)
-            w_h, h_h = max(int(WIDTH * scale), 1), max(int(HEIGHT * scale), 1)
-            temp = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-            temp.paste(hero_asset.resize((w_h, h_h), Image.Resampling.LANCZOS), (int((WIDTH - w_h) // 2), int((HEIGHT - h_h) // 2)))
-            canvas.alpha_composite(temp)
+            scale = 2.5 - (ease_out_expo(hp) * 1.5)
+            nw, nh = max(10, int(orig_tw * scale)), max(10, int(orig_th * scale))
+            scaled_hero = hero_asset.resize((nw, nh), Image.Resampling.BILINEAR)
+            canvas.paste(scaled_hero, (WIDTH // 2 - nw // 2, 570 - nh // 2), scaled_hero)
 
             if time_sec >= impact_time:
                 if not confetti_triggered:
                     confetti_triggered = True
-                    for _ in range(250):
+                    for _ in range(200):
                         angle = random.uniform(0, 2*math.pi)
-                        speed = random.uniform(15, 60)
-                        confetti.append({'x': WIDTH//2, 'y': 570, 'vx': math.cos(angle)*speed, 'vy': math.sin(angle)*speed-20, 'col': random.choice([(255,215,0), (0,212,255), (255,0,150), (255,255,255)]), 'size': random.randint(4, 15), 'life': 1.0})
+                        speed = random.uniform(12, 45)
+                        confetti.append({'x': WIDTH//2, 'y': 570, 'vx': math.cos(angle)*speed, 'vy': math.sin(angle)*speed-15, 'col': random.choice([(255,215,0), (0,212,255), (255,0,150), (255,255,255)]), 'size': random.randint(4, 12), 'life': 1.0})
 
                 frames_since = int(frame - (impact_time * FPS))
                 if frames_since < 5:
-                    intensity = int(25 - (frames_since * 5))
+                    intensity = int(20 - (frames_since * 4))
                     shake_dx, shake_dy = random.randint(-intensity, intensity), random.randint(-intensity, intensity)
 
         if time_sec >= impact_time:
@@ -880,38 +834,33 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
                 if p['life'] > 0:
                     p['x'] += p['vx']
                     p['y'] += p['vy']
-                    p['vy'] += 2.5
-                    p['life'] -= 0.02
+                    p['vy'] += 2.0
+                    p['life'] -= 0.025
                     s = int(p['size'])
                     c_draw.rectangle([int(p['x'])-s, int(p['y'])-s//2, int(p['x'])+s, int(p['y'])+s//2], fill=p['col']+(int(255*max(p['life'], 0)),))
             canvas.alpha_composite(c_layer)
-
-            if impact_time + 0.2 <= time_sec <= impact_time + 0.8:
-                bx = int(200 + (1500 * ((time_sec - (impact_time + 0.2)) / 0.6)))
-                beam_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-                ImageDraw.Draw(beam_layer).polygon([(bx+100, 0), (bx+300, 0), (bx-100, HEIGHT), (bx-300, HEIGHT)], fill=(255, 255, 255, 200))
-                beam_layer = beam_layer.filter(ImageFilter.GaussianBlur(15))
-                beam_layer.putalpha(ImageChops.multiply(beam_layer.split()[3], hero_alpha_mask))
-                canvas.alpha_composite(beam_layer)
 
             glitter_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
             g_draw = ImageDraw.Draw(glitter_layer)
             for g in box_glitters:
                 g['phase'] += g['speed']
                 pulse = (math.sin(g['phase']) + 1) / 2
-                s = int(5 + 25 * pulse)
+                s = int(5 + 20 * pulse)
                 g_op = int(50 + 205 * pulse)
                 g_draw.line([(g['x']-s, g['y']), (g['x']+s, g['y'])], fill=(255, 235, 100, g_op), width=3)
                 g_draw.line([(g['x'], g['y']-s), (g['x'], g['y']+s)], fill=(255, 235, 100, g_op), width=3)
                 g_draw.ellipse([g['x']-4, g['y']-4, g['x']+4, g['y']+4], fill=(255, 255, 255, g_op))
-            canvas.alpha_composite(glitter_layer.filter(ImageFilter.GaussianBlur(3)))
-            canvas.alpha_composite(glitter_layer)
+            canvas.alpha_composite(glitter_layer.filter(ImageFilter.GaussianBlur(2)))
 
         final_frame = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,255))
         final_frame.paste(canvas, (int(shake_dx), int(shake_dy)))
         out.write(cv2.cvtColor(np.array(final_frame), cv2.COLOR_RGBA2BGR))
 
+        if progress_cb and frame % 25 == 0:
+            progress_cb(frame + 1, total_frames)
+
     out.release()
+    if progress_cb: progress_cb(total_frames, total_frames)
     gc.collect()
 
     cmd = ["ffmpeg", "-y", "-i", raw_path]
@@ -927,15 +876,11 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(raw_path): os.remove(raw_path)
 
-def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, base_dur, is_4col, end_delay, start_delay_override=None):
+def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, base_dur, is_4col, end_delay, start_delay_override=None, progress_cb=None):
     audio_file = out_path.replace(".mp4", ".wav")
     audio_dur = get_audio_duration(audio_file)
     
-    if start_delay_override is not None and start_delay_override > 0:
-        start_delay = start_delay_override
-    else:
-        start_delay = audio_dur if audio_dur > 0 else 2.0
-        
+    start_delay = start_delay_override if (start_delay_override and start_delay_override > 0) else (audio_dur if audio_dur > 0 else 2.0)
     calc_dur = max(start_delay + base_dur, 8.0)
     total_frames = int(FPS * calc_dur)
     
@@ -963,25 +908,20 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         m_draw.line([(0, y), (WIDTH, y)], fill=int(255 * (y - fade_start) / (fade_end - fade_start)))
     m_draw.rectangle([0, fade_end, WIDTH, HEIGHT], fill=255)
 
-    math_cache = []
-    floating_glitters = []
-    temp_draw = ImageDraw.Draw(Image.new("RGBA", (1,1)))
-    font_ribbon = load_font("extrabold", 44)
-    bbox_ribbon = temp_draw.textbbox((0, 0), prize_heading.upper(), font=font_ribbon)
-    ribbon_w = max(1040, (bbox_ribbon[2] - bbox_ribbon[0]) + 120)
-    rx = (ribbon_w // 2) - 40
+    raw_path = out_path.replace(".mp4", "_raw.mp4")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
 
-    badge_glitters_state = [
-        {'x': WIDTH//2 - rx, 'y': 280 - 50, 'phase': random.uniform(0, 6), 'speed': 0.10},
-        {'x': WIDTH//2 + rx, 'y': 280 - 50, 'phase': random.uniform(0, 6), 'speed': 0.15},
-        {'x': WIDTH//2 - rx, 'y': 280 + 50, 'phase': random.uniform(0, 6), 'speed': 0.12},
-        {'x': WIDTH//2 + rx, 'y': 280 + 50, 'phase': random.uniform(0, 6), 'speed': 0.17},
-    ]
-    
     for frame in range(total_frames):
         time_sec = frame / FPS
-        h_op = ease_out_expo(min(max(time_sec / 0.5, 0.0), 1.0)) if time_sec > 0.0 else 0.0
-        
+        canvas = bg_asset.copy()
+        draw = ImageDraw.Draw(canvas)
+
+        h_op = ease_out_expo(min(max(time_sec / 0.5, 0.0), 1.0))
+        if h_op > 0.05:
+            draw.text((WIDTH//2, int(60 - (30 * (1 - h_op)))), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, int(255 * h_op)), anchor="mm")
+            draw.text((WIDTH//2, int(135 - (30 * (1 - h_op)))), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, int(255 * h_op)), anchor="mm")
+
         scroll_start = start_delay
         scroll_end = max(scroll_start + 0.5, calc_dur - end_delay)
         
@@ -991,52 +931,21 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
             crop_y = int(max_scroll * ease_in_out_cubic(progress))
         elif time_sec >= scroll_end:
             crop_y = max_scroll
-            
-        c_op = 1.0
-        if time_sec < 0.8:
-            c_op = max((time_sec - 0.2) / 0.6, 0.0)
-            
-        beam_x = int(-400 + (2800 * ((time_sec % 3.0) / 3.0)))
-        r_op = ease_out_expo(min(max((time_sec - 0.2) / 0.5, 0.0), 1.0)) if time_sec > 0.2 else 0.0
 
-        if random.random() < 0.5:
-            floating_glitters.append({'x': random.randint(150, 1770), 'y': random.randint(350, 1000), 'life': 1.0, 's': random.randint(10, 25)})
-        
-        f_glitters = []
-        for g in floating_glitters:
-            if g['life'] > 0:
-                g['life'] -= 0.05
-                pulse = math.sin(g['life'] * math.pi)
-                f_glitters.append((g['x'], g['y'], int(g['s'] * pulse), int(255 * max(pulse, 0))))
-        floating_glitters = [g for g in floating_glitters if g['life'] > 0]
-        
-        b_glitters = []
-        if r_op > 0.5:
-            for g in badge_glitters_state:
-                g['phase'] += g['speed']
-                pulse = (math.sin(g['phase']) + 1) / 2
-                s = int(5 + 25 * pulse)
-                op = int(50 + 205 * pulse)
-                b_glitters.append((g['x'], g['y'], s, op))
+        cards_layer = giant_canvas.crop((0, crop_y, WIDTH, crop_y + HEIGHT))
+        cards_layer.putalpha(ImageChops.multiply(cards_layer.split()[3], mask))
+        canvas.alpha_composite(cards_layer)
 
-        math_cache.append({'h_op': h_op, 'hy_1': int(60 - (30 * (1 - h_op))), 'hy_2': int(135 - (30 * (1 - h_op))), 'crop_y': crop_y, 'c_op': c_op, 'beam_x': beam_x, 'r_op': r_op, 'floating_glitters': f_glitters, 'badge_glitters': b_glitters})
+        if time_sec > 0.2:
+            canvas.alpha_composite(ribbon_asset)
 
-    init_worker_assets(bg_asset, ribbon_asset, mask, giant_canvas, math_cache, lottery_title)
+        out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
 
-    raw_path = out_path.replace(".mp4", "_raw.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
-    
-    workers = min(3, os.cpu_count() or 1)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        for bgr_frame in executor.map(mp_render_single_frame, range(total_frames), chunksize=15):
-            out.write(bgr_frame)
+        if progress_cb and frame % 30 == 0:
+            progress_cb(frame + 1, total_frames)
 
     out.release()
-    
-    global MP_BG_ASSET, MP_RIBBON_ASSET, MP_SCROLL_MASK, MP_BEAM_TEMPLATE, MP_BIG_CARDS_LAYER, MP_MATH_CACHE
-    MP_BG_ASSET = MP_RIBBON_ASSET = MP_SCROLL_MASK = MP_BEAM_TEMPLATE = MP_BIG_CARDS_LAYER = None
-    MP_MATH_CACHE = []
+    if progress_cb: progress_cb(total_frames, total_frames)
     gc.collect()
 
     cmd = ["ffmpeg", "-y", "-i", raw_path]
@@ -1052,7 +961,7 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     if os.path.exists(raw_path): os.remove(raw_path)
 
 # ==========================================
-# 5. BOT PIPELINE & FFMPEG
+# 4. BOT PIPELINE & FFMPEG STITCHING
 # ==========================================
 def compress_and_combine(video_files, final_output):
     list_path = os.path.join(DOWNLOAD_DIR, "concat_list.txt")
@@ -1071,13 +980,13 @@ async def execute_result_pipeline(app, chat_id, target_url):
     
     text_msg, tts_txt, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
     if not prizes:
-        return await msg.edit_text("❌ Scraping failed or no data found. The results may not be fully published yet.")
+        return await msg.edit_text("❌ Scraping failed or no data found. Results may not be fully published.")
 
     await msg.delete()
     chunks = [text_msg[i:i+4000] for i in range(0, len(text_msg), 4000)]
     for chunk in chunks:
         await app.send_message(chat_id, chunk)
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.4)
 
     if tts_txt and tts_txt.strip():
         tts_file = io.BytesIO(tts_txt.encode('utf-8'))
@@ -1087,7 +996,7 @@ async def execute_result_pipeline(app, chat_id, target_url):
             document=tts_file,
             caption=f"🗣️ **Malayalam Pronunciation File for TTS**\n📅 `{draw_date}`"
         )
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.4)
 
     keyboard = InlineKeyboardMarkup([
         [
@@ -1100,7 +1009,7 @@ async def execute_result_pipeline(app, chat_id, target_url):
 USER_VIDEOS = {}
 
 # ==========================================
-# 6. ASYNC PYROFORK BOT
+# 5. ASYNC PYROFORK BOT
 # ==========================================
 async def run_pyrofork_bot():
     try:
@@ -1172,6 +1081,11 @@ async def run_pyrofork_bot():
             out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
             part1_dur = 0.0
 
+            CURRENT_STATUS["task"] = f"Audio Generation ({p_name})"
+            CURRENT_STATUS["progress"] = 0.1
+            CURRENT_STATUS["details"] = f"Synthesizing voiceover for {p_name}"
+            log_event(f"Starting pipeline for {p_name}...")
+
             if tts_entry:
                 status_msg = await client.send_message(chat_id, f"🗣️ **Generating Audio for {p_name}...**")
                 try:
@@ -1195,20 +1109,34 @@ async def run_pyrofork_bot():
                         elif os.path.exists(p1_file):
                             if os.path.exists(audio_path): os.remove(audio_path)
                             os.rename(p1_file, audio_path)
-                        elif os.path.exists(p2_file):
-                            if os.path.exists(audio_path): os.remove(audio_path)
-                            os.rename(p2_file, audio_path)
                     else:
                         await generate_cartesia_audio(str(tts_entry), audio_path)
 
                     if upload_individual and os.path.exists(audio_path):
                         await client.send_audio(chat_id=chat_id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n📅 `{draw_date}`")
                 except Exception as e:
-                    print(f"⚠️ Audio error for {p_name}: {e}", flush=True)
+                    log_event(f"Audio error on {p_name}: {e}")
                 finally:
                     await status_msg.delete()
 
-            status_msg = await client.send_message(chat_id, f"🎬 **Rendering {p_name} Video...**")
+            status_msg = await client.send_message(chat_id, f"🎬 **Rendering {p_name} Video...** [0%]")
+            last_ui_update = [0.0]
+
+            def on_frame_progress(current, total):
+                pct = int((current / total) * 100)
+                CURRENT_STATUS["task"] = f"Rendering {p_name}"
+                CURRENT_STATUS["progress"] = current / total
+                CURRENT_STATUS["details"] = f"Frame {current}/{total} ({pct}%)"
+                
+                # Throttle Telegram message updates to avoid bot rate limits
+                now = time.time()
+                if now - last_ui_update[0] > 3.0:
+                    last_ui_update[0] = now
+                    asyncio.run_coroutine_threadsafe(
+                        status_msg.edit_text(f"🎬 **Rendering {p_name} Video...** [{current}/{total} frames - {pct}%]"),
+                        asyncio.get_event_loop()
+                    )
+
             try:
                 if engine == "intro":
                     await asyncio.to_thread(intro.generate_video, out_path)
@@ -1216,16 +1144,16 @@ async def run_pyrofork_bot():
                     full_heading = prize_headings.get(p_name, p_name)
                     if engine == "bang":
                         bang_impact = part1_dur if part1_dur > 0 else None
-                        await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur, bang_impact)
+                        await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur, bang_impact, on_frame_progress)
                     else:
                         scroll_start = part1_dur if part1_dur > 0 else None
-                        await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay, scroll_start)
+                        await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay, scroll_start, on_frame_progress)
 
                 if upload_individual and os.path.exists(out_path):
                     await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
                     await client.send_video(chat_id=chat_id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
             except Exception as e:
-                print(f"❌ Video render error for {p_name}: {e}", flush=True)
+                log_event(f"Video render error for {p_name}: {e}")
             finally:
                 await status_msg.delete()
 
@@ -1234,7 +1162,7 @@ async def run_pyrofork_bot():
         @app.on_callback_query(filters.regex(r"^(rs|ru)_(\d+)_(.*)"))
         async def handle_render_action(client, callback_query):
             action, tier_idx, draw_date = callback_query.matches[0].group(1), int(callback_query.matches[0].group(2)), callback_query.matches[0].group(3)
-            await callback_query.message.edit_text("🔎 **Fetching data for rendering...**")
+            await callback_query.message.edit_text("🔎 **Fetching draw results for rendering...**")
             
             draws = fetch_last_10_draws()
             target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
@@ -1270,12 +1198,18 @@ async def run_pyrofork_bot():
                         video_files.append(vid_out)
 
             if action == "ru" and len(video_files) > 0:
+                CURRENT_STATUS["task"] = "Final Stitching"
+                CURRENT_STATUS["progress"] = 0.95
+                CURRENT_STATUS["details"] = f"Combining {len(video_files)} video segments..."
                 status_msg = await client.send_message(callback_query.message.chat.id, "🗜️ **Combining selected videos...**")
                 await asyncio.to_thread(compress_and_combine, video_files, FINAL_OUTPUT_VIDEO)
                 await status_msg.edit_text("🚀 **Uploading final combined video...**")
                 await client.send_video(chat_id=callback_query.message.chat.id, video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Combined Draw**\n📅 `{draw_date}`")
                 await status_msg.delete()
                 if os.path.exists(FINAL_OUTPUT_VIDEO): os.remove(FINAL_OUTPUT_VIDEO)
+                CURRENT_STATUS["task"] = "Idle"
+                CURRENT_STATUS["progress"] = 1.0
+                CURRENT_STATUS["details"] = "Done!"
 
         @app.on_callback_query(filters.regex(r"^rr_(.*)"))
         async def handle_range_request(client, callback_query):
@@ -1319,7 +1253,6 @@ async def run_pyrofork_bot():
             ]
 
             video_files = []
-            
             for p_name, engine, dur, is_4c, theme, end_delay in tier_config[start_idx : end_idx + 1]:
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
                     tts_entry = tts_dict.get(p_name)
@@ -1352,7 +1285,7 @@ async def run_pyrofork_bot():
         @app.on_message(filters.command("combine") & filters.private)
         async def handle_combine(client, message):
             chat_id = message.chat.id
-            if chat_id not in USER_VIDEOS or len(USER_VIDEOS[chat_id]) == 0: return await message.reply_text("❌ You need to send me video files first!")
+            if chat_id not in USER_VIDEOS or len(USER_VIDEOS[chat_id]) == 0: return await message.reply_text("❌ Send video files first!")
             status = await message.reply_text("🗜️ **Combining seamlessly...**")
             out_path = os.path.join(DOWNLOAD_DIR, f"manual_combined_{chat_id}.mp4")
             await asyncio.to_thread(compress_and_combine, USER_VIDEOS[chat_id], out_path)
@@ -1363,15 +1296,15 @@ async def run_pyrofork_bot():
             USER_VIDEOS[chat_id] = []
 
         await app.start()
-        print("**[LOG]** Bot Started Successfully.", flush=True)
+        log_event("Bot Started Successfully.")
         await asyncio.Event().wait()
     except Exception as e:
-        print(f"**[CRITICAL ERROR]** Bot thread crashed: {e}", flush=True)
+        log_event(f"CRITICAL ERROR: Bot thread crashed: {e}")
     finally:
         if 'app' in locals() and app.is_initialized: await app.stop()
 
 # ==========================================
-# 7. STREAMLIT THREADING
+# 6. STREAMLIT DASHBOARD & LIVE TELEMETRY
 # ==========================================
 @st.cache_resource
 def start_bot_thread():
@@ -1381,10 +1314,28 @@ def start_bot_thread():
             asyncio.set_event_loop(loop)
             loop.run_until_complete(run_pyrofork_bot())
         except Exception as e:
-            print(f"**[CRITICAL ERROR]** Async loop crashed: {e}", flush=True)
+            log_event(f"Async loop crashed: {e}")
     threading.Thread(target=run_async_loop, daemon=True).start()
 
 start_bot_thread()
 
-st.title("Kerala Lottery Video Engine 🎬")
-st.write("Bot is running. Powered by strict synchronous CV2 writing and ThreadPool Executor.")
+st.set_page_config(page_title="Kerala Lottery Engine", page_icon="🎬", layout="wide")
+st.title("🎬 Kerala Lottery Video Production Engine")
+st.caption("Active & Connected • Live Frame Telemetry & Multi-Tier Pipeline")
+
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    st.subheader("📊 Engine Status")
+    st.metric(label="Current Task", value=CURRENT_STATUS["task"])
+    st.progress(CURRENT_STATUS["progress"])
+    st.info(CURRENT_STATUS["details"])
+
+with col2:
+    st.subheader("📜 Live Process Console")
+    log_area = st.empty()
+    log_area.code("\n".join(LOG_HISTORY) if LOG_HISTORY else "System ready. Waiting for draw commands...", language="text")
+
+# Auto-refresh Streamlit UI every 2 seconds to display live progress bars
+time.sleep(2)
+st.rerun()
