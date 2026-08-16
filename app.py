@@ -41,7 +41,8 @@ TARGET_CHANNEL_ID = -1003889675767
 
 UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE = False
 
-# 1. BASE VIDEO DURATIONS (IN SECONDS)
+# 1. BASE VIDEO ANIMATION DURATIONS (IN SECONDS)
+# Note: Scrolling animation starts strictly AFTER the voiceover completes.
 DURATION_1ST_PRIZE = 10
 DURATION_CONSOLATION = 16
 DURATION_2ND_PRIZE = 10
@@ -49,9 +50,9 @@ DURATION_3RD_PRIZE = 10
 DURATION_4TH_PRIZE = 25
 DURATION_5TH_PRIZE = 25
 DURATION_6TH_PRIZE = 25
-DURATION_7TH_PRIZE = 90
-DURATION_8TH_PRIZE = 90
-DURATION_9TH_PRIZE = 90
+DURATION_7TH_PRIZE = 80   # 1.33 minutes scroll
+DURATION_8TH_PRIZE = 80   # 1.33 minutes scroll
+DURATION_9TH_PRIZE = 80   # 1.33 minutes scroll
 
 # 2. SCROLL SPEED SETTINGS (END DELAYS)
 CONSOLATION_END_DELAY = 2.0
@@ -158,7 +159,7 @@ def generate_cinematic_bang(file_path):
     if os.path.exists(file_path): return
     GLOBAL_STATE.log(f"Synthesizing Cinematic Bang Audio to {file_path}...")
     sample_rate = 44100
-    duration = 4.5
+    duration = 5.0
     total_samples = int(sample_rate * duration)
     
     pcm = array.array('h')
@@ -204,7 +205,7 @@ def generate_cinematic_bang(file_path):
         wf.setframerate(sample_rate)
         wf.writeframes(pcm.tobytes())
 
-def generate_calm_bgm(file_path, duration=90.0):
+def generate_calm_bgm(file_path, duration=150.0):
     if os.path.exists(file_path): return
     GLOBAL_STATE.log(f"Synthesizing Calm Scroll Ambient Pad to {file_path}...")
     sample_rate = 44100
@@ -347,7 +348,7 @@ def to_tts_format(ticket_str: str) -> str:
         return ticket_clean
 
 def get_malayalam_prize_money(amount_str):
-    # Strip brackets, parentheses, and text to eliminate unwanted appended numbers
+    # Strip brackets, parentheses, and letters to eliminate unwanted appended numbers
     clean_str = re.sub(r'\[.*?\]|\(.*?\)', '', str(amount_str))
     clean_num = re.sub(r'[^\d]', '', clean_str)
     if not clean_num: return ""
@@ -477,7 +478,6 @@ def fetch_last_10_draws():
                     if not existing:
                         draws.append({'date': d_str, 'title': raw_title or d_str, 'url': href})
                     elif existing and re.match(r'^\d{2}[./-]\d{2}[./-]\d{4}$', existing['title']) and raw_title and not re.match(r'^\d{2}[./-]\d{2}[./-]\d{4}$', raw_title):
-                        # Upgrade placeholder date title to real lottery name (e.g., "Karunya Plus KN 636")
                         existing['title'] = raw_title
 
             if len(draws) >= 10: break
@@ -1090,6 +1090,7 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     audio_file = out_path.replace(".mp4", ".wav")
     audio_dur = get_audio_duration(audio_file)
     
+    # 1st, 2nd, 3rd Prize Duration: Audio Duration + 2.0s
     calc_dur = max(audio_dur + 2.0 if audio_dur > 0 else base_dur, 6.0)
     total_frames = int(FPS * calc_dur)
     
@@ -1220,24 +1221,24 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         delay_ms = int(impact_time * 1000)
         cmd.extend([
             "-i", audio_file, "-i", BANG_AUDIO_BGM, "-filter_complex", 
-            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0[a1];"
+            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad[a1];"
             f"[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.25,adelay={delay_ms}|{delay_ms}[a2];"
-            f"[a1][a2]amix=inputs=2:duration=longest:dropout_transition=0[aout]", 
+            f"[a1][a2]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{calc_dur}[aout]", 
             "-map", "0:v", "-map", "[aout]"
         ])
     elif os.path.exists(audio_file):
         cmd.extend([
             "-i", audio_file, "-filter_complex",
-            "[1:a]aformat=channel_layouts=stereo:sample_rates=44100[aout]",
+            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,apad,atrim=0:{calc_dur}[aout]",
             "-map", "0:v", "-map", "[aout]"
         ])
     else:
         cmd.extend([
-            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:d={calc_dur}",
             "-map", "0:v", "-map", "1:a"
         ])
         
-    cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", out_path])
+    cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", out_path])
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(raw_path): os.remove(raw_path)
 
@@ -1245,8 +1246,9 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     audio_file = out_path.replace(".mp4", ".wav")
     audio_dur = get_audio_duration(audio_file)
     
+    # Scroll animation starts strictly AFTER voiceover completes
     start_delay = start_delay_override if (start_delay_override and start_delay_override > 0) else (audio_dur if audio_dur > 0 else 2.0)
-    calc_dur = max(start_delay + base_dur, 8.0)
+    calc_dur = start_delay + base_dur
     total_frames = int(FPS * calc_dur)
     
     cols = 4 if is_4col else 2
@@ -1320,24 +1322,24 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     if os.path.exists(audio_file) and os.path.exists(SCROLL_AUDIO_BGM):
         cmd.extend([
             "-i", audio_file, "-i", SCROLL_AUDIO_BGM, "-filter_complex", 
-            "[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0[a1];"
-            "[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.15[bgm];"
-            "[a1][bgm]amix=inputs=2:duration=first[aout]", 
+            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad[vocal];"
+            f"[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.15[bgm];"
+            f"[vocal][bgm]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{calc_dur}[aout]", 
             "-map", "0:v", "-map", "[aout]"
         ])
     elif os.path.exists(audio_file):
         cmd.extend([
             "-i", audio_file, "-filter_complex",
-            "[1:a]aformat=channel_layouts=stereo:sample_rates=44100[aout]",
+            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,apad,atrim=0:{calc_dur}[aout]",
             "-map", "0:v", "-map", "[aout]"
         ])
     else:
         cmd.extend([
-            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:d={calc_dur}",
             "-map", "0:v", "-map", "1:a"
         ])
         
-    cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", out_path])
+    cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", out_path])
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(raw_path): os.remove(raw_path)
 
@@ -1351,17 +1353,19 @@ def compress_and_combine(video_files, final_output):
         return
 
     cmd = ["ffmpeg", "-y"]
-    filter_inputs = ""
+    filter_str = ""
     for i, vid in enumerate(video_files):
         cmd.extend(["-i", vid])
-        filter_inputs += f"[{i}:v:0][{i}:a:0]"
+        filter_str += f"[{i}:v:0]scale=1920:1080,setsar=1,fps=30[v{i}];[{i}:a:0]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a{i}];"
         
-    filter_complex = f"{filter_inputs}concat=n={len(video_files)}:v=1:a=1[v][a]"
+    concat_inputs = "".join([f"[v{i}][a{i}]" for i in range(len(video_files))])
+    filter_complex = f"{filter_str}{concat_inputs}concat=n={len(video_files)}:v=1:a=1[v][a]"
+    
     cmd.extend([
         "-filter_complex", filter_complex,
         "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "24", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "256k", "-ar", "44100", "-ac", "2",
         final_output
     ])
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1607,17 +1611,26 @@ async def run_pyrofork_bot():
                         video_files.append(vid_out)
                         video_durations_map[p_name] = get_video_duration(vid_out)
 
-            # Generate and Send YouTube Metadata Package
+            # Generate and Send 1-Tap Copyable YouTube Metadata Package
             title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map)
             
-            yt_msg = (
-                f"🏷️ **YOUTUBE TITLES:**\n`{title_1}`\n\n`{title_2}`\n\n"
-                f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS:**\n```text\n{yt_desc}\n```\n\n"
-                f"🏷️ **YOUTUBE TAGS:**\n`{yt_tags}`"
+            await client.send_message(
+                callback_query.message.chat.id,
+                f"🏷️ **YOUTUBE TITLE (OPTION 1):**\n`{title_1}`\n\n🏷️ **YOUTUBE TITLE (OPTION 2):**\n`{title_2}`"
+            )
+            await client.send_message(
+                callback_query.message.chat.id,
+                f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (TAP TO COPY):**\n```{yt_desc}```"
+            )
+            await client.send_message(
+                callback_query.message.chat.id,
+                f"🏷️ **YOUTUBE TAGS (TAP TO COPY):**\n`{yt_tags}`"
             )
             
-            await client.send_message(callback_query.message.chat.id, yt_msg)
-            await broadcast_to_channel(client, text=yt_msg)
+            # Broadcast same formatted package to Channel
+            await broadcast_to_channel(client, text=f"🏷️ **YOUTUBE TITLE (OPTION 1):**\n`{title_1}`\n\n🏷️ **YOUTUBE TITLE (OPTION 2):**\n`{title_2}`")
+            await broadcast_to_channel(client, text=f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (TAP TO COPY):**\n```{yt_desc}```")
+            await broadcast_to_channel(client, text=f"🏷️ **YOUTUBE TAGS (TAP TO COPY):**\n`{yt_tags}`")
 
             if action == "ru" and len(video_files) > 1:
                 GLOBAL_STATE.set_status("Final Stitching", 0.95, f"Combining {len(video_files)} video segments...")
@@ -1692,17 +1705,26 @@ async def run_pyrofork_bot():
                         video_files.append(vid_out)
                         video_durations_map[p_name] = get_video_duration(vid_out)
 
-            # Generate and Send YouTube Metadata Package
+            # Generate and Send 1-Tap Copyable YouTube Metadata Package
             title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map)
             
-            yt_msg = (
-                f"🏷️ **YOUTUBE TITLES:**\n`{title_1}`\n\n`{title_2}`\n\n"
-                f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS:**\n```text\n{yt_desc}\n```\n\n"
-                f"🏷️ **YOUTUBE TAGS:**\n`{yt_tags}`"
+            await client.send_message(
+                message.chat.id,
+                f"🏷️ **YOUTUBE TITLE (OPTION 1):**\n`{title_1}`\n\n🏷️ **YOUTUBE TITLE (OPTION 2):**\n`{title_2}`"
             )
-            
-            await client.send_message(message.chat.id, yt_msg)
-            await broadcast_to_channel(client, text=yt_msg)
+            await client.send_message(
+                message.chat.id,
+                f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (TAP TO COPY):**\n```{yt_desc}```"
+            )
+            await client.send_message(
+                message.chat.id,
+                f"🏷️ **YOUTUBE TAGS (TAP TO COPY):**\n`{yt_tags}`"
+            )
+
+            # Broadcast to Channel
+            await broadcast_to_channel(client, text=f"🏷️ **YOUTUBE TITLE (OPTION 1):**\n`{title_1}`\n\n🏷️ **YOUTUBE TITLE (OPTION 2):**\n`{title_2}`")
+            await broadcast_to_channel(client, text=f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (TAP TO COPY):**\n```{yt_desc}```")
+            await broadcast_to_channel(client, text=f"🏷️ **YOUTUBE TAGS (TAP TO COPY):**\n`{yt_tags}`")
 
             if len(video_files) > 1:
                 status_msg = await client.send_message(message.chat.id, "🗜️ **Combining custom range...**")
