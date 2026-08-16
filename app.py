@@ -26,11 +26,14 @@ import base64
 import uuid
 import wave
 
+# --- SAFE INDIC-NUM2WORDS LOADER ---
 try:
     from indic_num2words import num2words
 except ImportError:
-    num2words = None
-    print("**[WARNING]** indic_num2words not found. Using fallback dictionary.", flush=True)
+    try:
+        from indic_num2words.indic_num2words import num2words
+    except ImportError:
+        num2words = None
 
 # ==========================================
 # --- USER CONFIGURATION BLOCK ---
@@ -38,7 +41,7 @@ except ImportError:
 
 UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE = False
 
-# 1. SET BASE VIDEO DURATIONS (IN SECONDS)
+# 1. BASE VIDEO DURATIONS (IN SECONDS)
 DURATION_1ST_PRIZE = 10
 DURATION_CONSOLATION = 16
 DURATION_2ND_PRIZE = 10
@@ -72,15 +75,32 @@ SCROLL_AUDIO_BGM = os.path.join(DOWNLOAD_DIR, "calm_scroll_bgm.wav")
 FPS = 30
 WIDTH, HEIGHT = 1920, 1080
 
-# --- LIVE TELEMETRY LOG BUFFER ---
-LOG_HISTORY = collections.deque(maxlen=40)
-CURRENT_STATUS = {"task": "Idle", "progress": 0.0, "details": "Waiting for commands..."}
+# ==========================================
+# PERSISTENT TELEMETRY & CACHE SINGLETON
+# ==========================================
+class TelemetryState:
+    def __init__(self):
+        self.log_history = collections.deque(maxlen=60)
+        self.current_status = {"task": "Idle", "progress": 0.0, "details": "Waiting for draw commands..."}
+        self.scraped_cache = {}
+        self.main_event_loop = None
 
-def log_event(text: str):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    entry = f"[{timestamp}] {text}"
-    LOG_HISTORY.append(entry)
-    print(entry, flush=True)
+    def log(self, text: str):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        entry = f"[{timestamp}] {text}"
+        self.log_history.append(entry)
+        print(entry, flush=True)
+
+    def set_status(self, task: str, progress: float, details: str):
+        self.current_status["task"] = task
+        self.current_status["progress"] = max(0.0, min(1.0, progress))
+        self.current_status["details"] = details
+
+@st.cache_resource
+def get_telemetry():
+    return TelemetryState()
+
+GLOBAL_STATE = get_telemetry()
 
 # --- FONT LOADER ---
 FONTS = {
@@ -119,7 +139,7 @@ def get_audio_duration(audio_path):
 # ==========================================
 def generate_cinematic_bang(file_path):
     if os.path.exists(file_path): return
-    log_event(f"Synthesizing Cinematic Bang Audio to {file_path}...")
+    GLOBAL_STATE.log(f"Synthesizing Cinematic Bang Audio to {file_path}...")
     sample_rate = 44100
     duration = 4.5
     total_samples = int(sample_rate * duration)
@@ -169,7 +189,7 @@ def generate_cinematic_bang(file_path):
 
 def generate_calm_bgm(file_path, duration=90.0):
     if os.path.exists(file_path): return
-    log_event(f"Synthesizing Calm Scroll Ambient Pad to {file_path}...")
+    GLOBAL_STATE.log(f"Synthesizing Calm Scroll Ambient Pad to {file_path}...")
     sample_rate = 44100
     total_samples = int(sample_rate * duration)
     
@@ -309,7 +329,7 @@ def get_public_token_sync():
             tok = data.get("token", data.get("access_token"))
             if tok: return tok
     except Exception as e:
-        log_event(f"Token acquisition notice: {e}")
+        GLOBAL_STATE.log(f"Token acquisition notice: {e}")
     return None
 
 async def get_public_token():
@@ -350,10 +370,10 @@ async def generate_cartesia_audio(text, output_filename, token=None, retries=3):
                             wav_file.writeframes(audio_buffer)
                         return True
                     elif response.get("type") == "error":
-                        log_event(f"Cartesia Error: {response.get('error')}")
+                        GLOBAL_STATE.log(f"Cartesia Error: {response.get('error')}")
                         break
         except Exception as e:
-            log_event(f"Cartesia WebSocket (Attempt {attempt+1}/{retries}): {e}")
+            GLOBAL_STATE.log(f"Cartesia WebSocket (Attempt {attempt+1}/{retries}): {e}")
             token = None
             await asyncio.sleep(1.5)
     return False
@@ -368,7 +388,7 @@ def concat_wav_files(file1, file2, out_file):
             out_w.writeframes(data)
         return True
     except Exception as e:
-        log_event(f"Audio Concat Notice: {e}")
+        GLOBAL_STATE.log(f"Audio Concat Notice: {e}")
         return False
 
 # ==========================================
@@ -394,7 +414,7 @@ def fetch_last_10_draws():
             if len(draws) >= 10: break
         return draws
     except Exception as e:
-        log_event(f"Error fetching draws: {e}")
+        GLOBAL_STATE.log(f"Error fetching draws: {e}")
         return []
 
 def clean_prize_heading(raw_str):
@@ -548,10 +568,23 @@ def parse_lottery_result_page(target_url: str):
                     tts_file_blocks.append(f"[{p_key} Header]\n{header_sentence}")
         
         tts_string = "\n\n".join(tts_file_blocks)
+        
+        # Store in singleton cache for subsequent instant render callbacks
+        GLOBAL_STATE.scraped_cache[draw_date] = {
+            "text_msg": "\n".join(msg_output),
+            "tts_txt": tts_string,
+            "tts_dict": tts_output,
+            "draw_date": draw_date,
+            "prizes": prizes_data,
+            "prize_headings": prize_headings,
+            "lottery_title": clean_lottery_title,
+            "target_url": target_url
+        }
+
         return "\n".join(msg_output), tts_string, tts_output, draw_date, prizes_data, prize_headings, clean_lottery_title
 
     except Exception as e:
-        log_event(f"Parsing Error: {e}")
+        GLOBAL_STATE.log(f"Parsing Error: {e}")
         return None, None, {}, None, {}, {}, None
 
 # ==========================================
@@ -694,7 +727,7 @@ def pre_render_ribbon_scroll(title_text):
     final.alpha_composite(layer)
     return final
 
-# Lightweight bounded Hero Text Renderer (Bypasses 9600x5400 OOM crash)
+# Lightweight bounded Hero Text Renderer (Safe from OOM)
 def pre_render_tight_hero_text(text):
     font = load_font("hero", 320)
     temp_draw = ImageDraw.Draw(Image.new("RGBA", (1,1)))
@@ -735,7 +768,7 @@ def pre_render_grid_card(text, is_small=False):
     return layer
 
 # ==========================================
-# 3. VIDEO RENDERING ENGINES (WITH LIVE TELEMETRY)
+# 3. VIDEO RENDERING ENGINES
 # ==========================================
 def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_dur, impact_time_override=None, progress_cb=None):
     audio_file = out_path.replace(".mp4", ".wav")
@@ -857,10 +890,15 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         out.write(cv2.cvtColor(np.array(final_frame), cv2.COLOR_RGBA2BGR))
 
         if progress_cb and frame % 25 == 0:
-            progress_cb(frame + 1, total_frames)
+            try:
+                progress_cb(frame + 1, total_frames)
+            except Exception:
+                pass
 
     out.release()
-    if progress_cb: progress_cb(total_frames, total_frames)
+    if progress_cb:
+        try: progress_cb(total_frames, total_frames)
+        except Exception: pass
     gc.collect()
 
     cmd = ["ffmpeg", "-y", "-i", raw_path]
@@ -942,10 +980,15 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
 
         if progress_cb and frame % 30 == 0:
-            progress_cb(frame + 1, total_frames)
+            try:
+                progress_cb(frame + 1, total_frames)
+            except Exception:
+                pass
 
     out.release()
-    if progress_cb: progress_cb(total_frames, total_frames)
+    if progress_cb:
+        try: progress_cb(total_frames, total_frames)
+        except Exception: pass
     gc.collect()
 
     cmd = ["ffmpeg", "-y", "-i", raw_path]
@@ -1012,6 +1055,7 @@ USER_VIDEOS = {}
 # 5. ASYNC PYROFORK BOT
 # ==========================================
 async def run_pyrofork_bot():
+    GLOBAL_STATE.main_event_loop = asyncio.get_running_loop()
     try:
         app = Client(
             "lottery_bot",
@@ -1081,10 +1125,8 @@ async def run_pyrofork_bot():
             out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
             part1_dur = 0.0
 
-            CURRENT_STATUS["task"] = f"Audio Generation ({p_name})"
-            CURRENT_STATUS["progress"] = 0.1
-            CURRENT_STATUS["details"] = f"Synthesizing voiceover for {p_name}"
-            log_event(f"Starting pipeline for {p_name}...")
+            GLOBAL_STATE.set_status(f"Audio Generation ({p_name})", 0.1, f"Synthesizing voiceover for {p_name}...")
+            GLOBAL_STATE.log(f"Starting pipeline for {p_name}...")
 
             if tts_entry:
                 status_msg = await client.send_message(chat_id, f"🗣️ **Generating Audio for {p_name}...**")
@@ -1115,7 +1157,7 @@ async def run_pyrofork_bot():
                     if upload_individual and os.path.exists(audio_path):
                         await client.send_audio(chat_id=chat_id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n📅 `{draw_date}`")
                 except Exception as e:
-                    log_event(f"Audio error on {p_name}: {e}")
+                    GLOBAL_STATE.log(f"Audio error on {p_name}: {e}")
                 finally:
                     await status_msg.delete()
 
@@ -1124,18 +1166,19 @@ async def run_pyrofork_bot():
 
             def on_frame_progress(current, total):
                 pct = int((current / total) * 100)
-                CURRENT_STATUS["task"] = f"Rendering {p_name}"
-                CURRENT_STATUS["progress"] = current / total
-                CURRENT_STATUS["details"] = f"Frame {current}/{total} ({pct}%)"
+                GLOBAL_STATE.set_status(f"Rendering {p_name}", current / total, f"Frame {current}/{total} ({pct}%)")
                 
-                # Throttle Telegram message updates to avoid bot rate limits
+                # Safe threadsafe Telegram message update
                 now = time.time()
-                if now - last_ui_update[0] > 3.0:
+                if now - last_ui_update[0] > 3.0 and GLOBAL_STATE.main_event_loop:
                     last_ui_update[0] = now
-                    asyncio.run_coroutine_threadsafe(
-                        status_msg.edit_text(f"🎬 **Rendering {p_name} Video...** [{current}/{total} frames - {pct}%]"),
-                        asyncio.get_event_loop()
-                    )
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            status_msg.edit_text(f"🎬 **Rendering {p_name} Video...** [{current}/{total} frames - {pct}%]"),
+                            GLOBAL_STATE.main_event_loop
+                        )
+                    except Exception:
+                        pass
 
             try:
                 if engine == "intro":
@@ -1153,7 +1196,7 @@ async def run_pyrofork_bot():
                     await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
                     await client.send_video(chat_id=chat_id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
             except Exception as e:
-                log_event(f"Video render error for {p_name}: {e}")
+                GLOBAL_STATE.log(f"Video render error for {p_name}: {e}")
             finally:
                 await status_msg.delete()
 
@@ -1164,9 +1207,17 @@ async def run_pyrofork_bot():
             action, tier_idx, draw_date = callback_query.matches[0].group(1), int(callback_query.matches[0].group(2)), callback_query.matches[0].group(3)
             await callback_query.message.edit_text("🔎 **Fetching draw results for rendering...**")
             
-            draws = fetch_last_10_draws()
-            target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
-            _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+            # Retrieve from cache to guarantee no data loss or URL shifting
+            if draw_date in GLOBAL_STATE.scraped_cache:
+                c_data = GLOBAL_STATE.scraped_cache[draw_date]
+                tts_dict = c_data["tts_dict"]
+                prizes = c_data["prizes"]
+                prize_headings = c_data["prize_headings"]
+                lottery_title = c_data["lottery_title"]
+            else:
+                draws = fetch_last_10_draws()
+                target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
+                _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
             
             tier_config = [
                 ("Intro", "intro", 0, False, "none", 0),
@@ -1198,18 +1249,14 @@ async def run_pyrofork_bot():
                         video_files.append(vid_out)
 
             if action == "ru" and len(video_files) > 0:
-                CURRENT_STATUS["task"] = "Final Stitching"
-                CURRENT_STATUS["progress"] = 0.95
-                CURRENT_STATUS["details"] = f"Combining {len(video_files)} video segments..."
+                GLOBAL_STATE.set_status("Final Stitching", 0.95, f"Combining {len(video_files)} video segments...")
                 status_msg = await client.send_message(callback_query.message.chat.id, "🗜️ **Combining selected videos...**")
                 await asyncio.to_thread(compress_and_combine, video_files, FINAL_OUTPUT_VIDEO)
                 await status_msg.edit_text("🚀 **Uploading final combined video...**")
                 await client.send_video(chat_id=callback_query.message.chat.id, video=FINAL_OUTPUT_VIDEO, caption=f"🎟️ **{lottery_title} - Combined Draw**\n📅 `{draw_date}`")
                 await status_msg.delete()
                 if os.path.exists(FINAL_OUTPUT_VIDEO): os.remove(FINAL_OUTPUT_VIDEO)
-                CURRENT_STATUS["task"] = "Idle"
-                CURRENT_STATUS["progress"] = 1.0
-                CURRENT_STATUS["details"] = "Done!"
+                GLOBAL_STATE.set_status("Idle", 1.0, "Ready")
 
         @app.on_callback_query(filters.regex(r"^rr_(.*)"))
         async def handle_range_request(client, callback_query):
@@ -1234,9 +1281,17 @@ async def run_pyrofork_bot():
             start_idx, end_idx = idx_map[start_str], idx_map[end_str]
 
             await message.reply_text("🔎 **Fetching data for custom range rendering...**")
-            draws = fetch_last_10_draws()
-            target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
-            _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+            
+            if draw_date in GLOBAL_STATE.scraped_cache:
+                c_data = GLOBAL_STATE.scraped_cache[draw_date]
+                tts_dict = c_data["tts_dict"]
+                prizes = c_data["prizes"]
+                prize_headings = c_data["prize_headings"]
+                lottery_title = c_data["lottery_title"]
+            else:
+                draws = fetch_last_10_draws()
+                target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
+                _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
             
             tier_config = [
                 ("Intro", "intro", 0, False, "none", 0),
@@ -1296,10 +1351,10 @@ async def run_pyrofork_bot():
             USER_VIDEOS[chat_id] = []
 
         await app.start()
-        log_event("Bot Started Successfully.")
+        GLOBAL_STATE.log("Bot Started Successfully.")
         await asyncio.Event().wait()
     except Exception as e:
-        log_event(f"CRITICAL ERROR: Bot thread crashed: {e}")
+        GLOBAL_STATE.log(f"CRITICAL ERROR: Bot thread crashed: {e}")
     finally:
         if 'app' in locals() and app.is_initialized: await app.stop()
 
@@ -1314,7 +1369,7 @@ def start_bot_thread():
             asyncio.set_event_loop(loop)
             loop.run_until_complete(run_pyrofork_bot())
         except Exception as e:
-            log_event(f"Async loop crashed: {e}")
+            GLOBAL_STATE.log(f"Async loop crashed: {e}")
     threading.Thread(target=run_async_loop, daemon=True).start()
 
 start_bot_thread()
@@ -1327,15 +1382,11 @@ col1, col2 = st.columns([1, 2])
 
 with col1:
     st.subheader("📊 Engine Status")
-    st.metric(label="Current Task", value=CURRENT_STATUS["task"])
-    st.progress(CURRENT_STATUS["progress"])
-    st.info(CURRENT_STATUS["details"])
+    st.metric(label="Current Task", value=GLOBAL_STATE.current_status["task"])
+    st.progress(GLOBAL_STATE.current_status["progress"])
+    st.info(GLOBAL_STATE.current_status["details"])
 
 with col2:
     st.subheader("📜 Live Process Console")
     log_area = st.empty()
-    log_area.code("\n".join(LOG_HISTORY) if LOG_HISTORY else "System ready. Waiting for draw commands...", language="text")
-
-# Auto-refresh Streamlit UI every 2 seconds to display live progress bars
-time.sleep(2)
-st.rerun()
+    log_area.code("\n".join(GLOBAL_STATE.log_history) if GLOBAL_STATE.log_history else "System ready. Waiting for draw commands...", language="text")
