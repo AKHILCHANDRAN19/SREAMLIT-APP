@@ -459,20 +459,27 @@ def fetch_last_10_draws():
         res = http_get(base_url)
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # Search across all table rows, articles, and blog cards
-        for row in soup.find_all(['tr', 'article', 'div']):
-            a_tag = row.find('a', href=True)
-            text = row.get_text(separator=' ')
-            # Universal date regex supporting '/', '-', and '.' separators
-            date_match = re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', text)
-            if date_match and a_tag and a_tag.get('href', '').endswith('.html'):
-                d_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
-                raw_title = a_tag.get_text(strip=True) or row.get_text(strip=True)
-                raw_title = re.sub(r'(?i)\b(?:official result|results? today|live)\b', '', raw_title)
-                raw_title = re.sub(r'\s+', ' ', raw_title).strip()
-                
-                if not any(d['date'] == d_str for d in draws):
-                    draws.append({'date': d_str, 'title': raw_title, 'url': a_tag['href']})
+        # Target specific result links directly by URL pattern
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag['href']
+            # Match standard lottery result URL format: /YYYY/MM/lottery-name-date.html
+            if re.search(r'/\d{4}/\d{2}/.*lottery.*\.html', href) and 'today-kerala-lottery-result-live' not in href:
+                date_match = re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', href) or \
+                             re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', a_tag.get_text())
+                if date_match:
+                    d_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
+                    raw_title = a_tag.get_text(strip=True)
+                    raw_title = re.sub(r'(?i)\b(?:official result|results? today|live|kerala lottery|results?)\b', '', raw_title)
+                    raw_title = re.sub(r'\s+', ' ', raw_title).strip()
+                    
+                    # Find if date is already in list
+                    existing = next((d for d in draws if d['date'] == d_str), None)
+                    if not existing:
+                        draws.append({'date': d_str, 'title': raw_title or d_str, 'url': href})
+                    elif existing and re.match(r'^\d{2}[./-]\d{2}[./-]\d{4}$', existing['title']) and raw_title and not re.match(r'^\d{2}[./-]\d{2}[./-]\d{4}$', raw_title):
+                        # Upgrade placeholder date title to real lottery name (e.g., "Karunya Plus KN 636")
+                        existing['title'] = raw_title
+
             if len(draws) >= 10: break
         return draws
     except Exception as e:
