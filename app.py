@@ -52,20 +52,12 @@ DURATION_7TH_PRIZE = 90
 DURATION_8TH_PRIZE = 90
 DURATION_9TH_PRIZE = 90
 
-# 2. SCROLL SPEED SETTINGS (START AND END DELAYS)
-CONSOLATION_START_DELAY = 2.0
+# 2. SCROLL SPEED SETTINGS (END DELAYS)
+# Start delays are now dynamically controlled by audio duration.
 CONSOLATION_END_DELAY = 2.0
-
-PRIZE_4TH_START_DELAY = 2.0
 PRIZE_4TH_END_DELAY = 2.0
-
-PRIZE_5TH_START_DELAY = 2.0
 PRIZE_5TH_END_DELAY = 2.0
-
-PRIZE_6TH_START_DELAY = 2.0
 PRIZE_6TH_END_DELAY = 2.0
-
-PRIZE_7_8_9_START_DELAY = 2.0
 PRIZE_7_8_9_END_DELAY = 2.0
 
 # ==========================================
@@ -274,7 +266,7 @@ def get_public_token():
         print(f"❌ Failed to get token: {e}", flush=True)
         return None
 
-async def generate_cartesia_audio(text, output_filename, token):
+async def generate_cartesia_audio(text, output_filename, token, retries=3):
     ws_url = f"wss://api.cartesia.ai/tts/websocket?cartesia_version=2024-06-10&api_key={token}"
     payload = {
         "context_id": str(uuid.uuid4()),
@@ -284,26 +276,29 @@ async def generate_cartesia_audio(text, output_filename, token):
         "voice": {"mode": "id", "id": CARTESIA_VIJAY_ID},
         "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": 44100}
     }
-    try:
-        async with websockets.connect(ws_url) as ws:
-            await ws.send(json.dumps(payload))
-            audio_buffer = bytearray()
-            while True:
-                response = json.loads(await ws.recv())
-                if response.get("type") == "chunk":
-                    audio_buffer.extend(base64.b64decode(response["data"]))
-                elif response.get("type") == "done":
-                    with wave.open(output_filename, "wb") as wav_file:
-                        wav_file.setnchannels(1)         
-                        wav_file.setsampwidth(2)         
-                        wav_file.setframerate(44100)     
-                        wav_file.writeframes(audio_buffer) 
-                    break
-                elif response.get("type") == "error":
-                    print(f"❌ Cartesia Error: {response.get('error')}", flush=True)
-                    break
-    except Exception as e:
-        print(f"❌ Cartesia Connection Error: {e}", flush=True)
+    for attempt in range(retries):
+        try:
+            async with websockets.connect(ws_url, ping_interval=None) as ws:
+                await ws.send(json.dumps(payload))
+                audio_buffer = bytearray()
+                while True:
+                    response = json.loads(await ws.recv())
+                    if response.get("type") == "chunk":
+                        audio_buffer.extend(base64.b64decode(response["data"]))
+                    elif response.get("type") == "done":
+                        with wave.open(output_filename, "wb") as wav_file:
+                            wav_file.setnchannels(1)         
+                            wav_file.setsampwidth(2)         
+                            wav_file.setframerate(44100)     
+                            wav_file.writeframes(audio_buffer) 
+                        return True
+                    elif response.get("type") == "error":
+                        print(f"❌ Cartesia Error: {response.get('error')}", flush=True)
+                        break
+        except Exception as e:
+            print(f"❌ Cartesia Connection Error (Attempt {attempt+1}/{retries}): {e}", flush=True)
+            await asyncio.sleep(2)
+    return False
 
 # ==========================================
 # 1. SCRAPING LOGIC
@@ -351,32 +346,33 @@ def parse_lottery_result_page(target_url: str):
         if not post_body:
             return "❌ Could not parse body.", None, {}, None, {}, {}, None
 
-        malayalam_name_series = ""
-        live_draw_tag = soup.find(lambda t: t.name in ['b', 'strong', 'span'] and 'തത്സമയ നറുക്കെടുപ്പ്' in t.text)
-        if live_draw_tag:
-            try:
-                nxt = live_draw_tag.find_next_sibling()
-                if nxt and nxt.name in ['div', 'span', 'b']:
-                    malayalam_name_series = nxt.text.strip()
-                else:
-                    malayalam_name_series = live_draw_tag.parent.text.split('റിസൾട്ട്')[-1].strip()
-                malayalam_name_series = re.sub(r'[\.\-]', ' ', malayalam_name_series)
-                malayalam_name_series = re.sub(r'\s+', ' ', malayalam_name_series).strip()
-            except: pass
-
         h1_tag = soup.find('h1', class_='entry-title')
         raw_title = h1_tag.get_text(strip=True) if h1_tag else "KERALA LOTTERY"
         blacklist_regex = r'(?i)\b(?:KERALA|LOTTERIES|LOTTERY|RESULTS?|TODAY|OFFICIAL|LIVE)\b|\d{2}[/-]\d{2}[/-]\d{4}|:'
         clean_lottery_title = re.sub(blacklist_regex, '', raw_title)
         clean_lottery_title = re.sub(r'\s+', ' ', clean_lottery_title).strip().upper()
 
-        if not malayalam_name_series: malayalam_name_series = clean_lottery_title
-
         for tag in post_body.find_all(['br', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li', 'table']):
             tag.insert_after('\n')
         
         full_text = post_body.get_text(separator=' ')
         lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
+
+        # Native Malayalam Name & Series Extraction Hook
+        malayalam_name_series = clean_lottery_title
+        for i, line in enumerate(lines):
+            if 'തത്സമയ നറുക്കെടുപ്പ്' in line and 'റിസൾട്ട്' in line:
+                parts = line.split('റിസൾട്ട്')
+                if len(parts) > 1 and parts[1].strip():
+                    potential_name = parts[1].strip()
+                elif i + 1 < len(lines):
+                    potential_name = lines[i+1].strip()
+                else:
+                    potential_name = clean_lottery_title
+                
+                potential_name = re.sub(r'[\.\-]', ' ', potential_name)
+                malayalam_name_series = re.sub(r'\s+', ' ', potential_name).strip()
+                break
 
         date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', full_text)
         draw_date = date_match.group(1).replace('/', '-') if date_match else "N/A"
@@ -443,9 +439,7 @@ def parse_lottery_result_page(target_url: str):
         except:
             dynamic_intro = f"ഇന്ന് നടന്ന {malayalam_name_series} ലോട്ടറിയുടെ ഔദ്യോഗിക ഫലങ്ങളാണ് ഇപ്പോൾ പ്രഖ്യാപിക്കുന്നത്."
 
-        static_intro = "നമസ്കാരം, കേരള സംസ്ഥാന ഭാഗ്യക്കുറി വകുപ്പിന്റെ ഇന്നത്തെ നറുക്കെടുപ്പ് ഫലങ്ങളിലേക്ക് ഏവർക്കും സ്വാഗതം. നിങ്ങൾക്ക് ഈ വീഡിയോ ഇഷ്ടമായെങ്കിൽ ലൈക് ചെയ്യാനും, ഷെയർ ചെയ്യാനും, ചാനൽ സബ്സ്ക്രൈബ് ചെയ്യാനും മറക്കരുതേ. ലോട്ടറി ഫലങ്ങൾ പ്രസിദ്ധീകരിക്കുമ്പോൾ തന്നെ വേഗത്തിൽ അറിയാനും വിശദമായ വിവരങ്ങൾക്കുമായി, ഡിസ്ക്രിപ്ഷനിലും എബൗട്ട് സെക്ഷനിലും നൽകിയിട്ടുള്ള ലിങ്ക് വഴി ഞങ്ങളുടെ വാട്സ്ആപ്പ് ചാനലിൽ ജോയിൻ ചെയ്യുക."
-        
-        tts_output["Intro"] = f"{static_intro}\n\n{dynamic_intro}"
+        tts_output["Intro"] = dynamic_intro
 
         prize_ml_names = {"1st Prize": "ഒന്നാം", "Consolation Prize": "സമാശ്വാസ", "2nd Prize": "രണ്ടാം", "3rd Prize": "മൂന്നാം", "4th Prize": "നാലാം", "5th Prize": "അഞ്ചാം", "6th Prize": "ആറാം", "7th Prize": "ഏഴാം", "8th Prize": "എട്ടാം", "9th Prize": "ഒമ്പതാം"}
         read_nums_for = ["1st Prize", "2nd Prize", "3rd Prize", "5th Prize", "Consolation Prize"]
@@ -733,11 +727,9 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     audio_file = out_path.replace(".mp4", ".wav")
     audio_dur = get_audio_duration(audio_file)
     
-    # Extend duration dynamically: Audio length + 2 seconds for visual impact
     calc_dur = audio_dur + 2.0 if audio_dur > 0 else base_dur
     total_frames = int(FPS * calc_dur)
     
-    # Delay the visual hit until exactly when the audio finishes
     impact_time = audio_dur if audio_dur > 0 else 1.0
     
     bg_asset = pre_render_background(theme)
@@ -881,11 +873,11 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(raw_path): os.remove(raw_path)
 
-def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, base_dur, is_4col, start_delay, end_delay):
+def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, base_dur, is_4col, end_delay):
     audio_file = out_path.replace(".mp4", ".wav")
     audio_dur = get_audio_duration(audio_file)
     
-    start_delay = audio_dur if audio_dur > 0 else start_delay
+    start_delay = audio_dur if audio_dur > 0 else 2.0
     calc_dur = start_delay + base_dur
     total_frames = int(FPS * calc_dur)
     
@@ -1023,14 +1015,12 @@ async def execute_result_pipeline(app, chat_id, target_url):
     if not prizes:
         return await msg.edit_text("❌ Scraping failed or no data found. The results may not be fully published yet.")
 
-    # 1. Send Text Chunks
     await msg.delete()
     chunks = [text_msg[i:i+4000] for i in range(0, len(text_msg), 4000)]
     for chunk in chunks:
         await app.send_message(chat_id, chunk)
         await asyncio.sleep(0.5)
 
-    # 2. Send TTS Document
     if tts_txt and tts_txt.strip():
         tts_file = io.BytesIO(tts_txt.encode('utf-8'))
         tts_file.name = f"TTS_{draw_date}.txt"
@@ -1041,7 +1031,6 @@ async def execute_result_pipeline(app, chat_id, target_url):
         )
         await asyncio.sleep(0.5)
 
-    # 3. Ask for Video Generation
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ Yes", callback_data=f"vy_{draw_date}"),
@@ -1065,10 +1054,10 @@ async def run_pyrofork_bot():
             welcome = (
                 "👋 **Welcome to Kerala Lottery Video Generator Bot!** ✨\n\n"
                 "**🌟 Available Commands:**\n"
-                "• 🚀 `/start` - Show this menu\n"
-                "• 🎯 `/generate` - Fetch today's result & render pipeline\n"
+                "• 🚀 `/generate` - Fetch today's result & render pipeline\n"
                 "• 📅 `/gencustom` - Select from last 10 draw dates\n"
-                "• 🔗 `/combine` - Stitch uploaded videos together"
+                "• 🔗 `/combine` - Stitch uploaded videos together\n"
+                "• ℹ️ `/start` - Show this menu"
             )
             await message.reply_text(welcome)
 
@@ -1125,17 +1114,17 @@ async def run_pyrofork_bot():
             _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
             
             tier_config = [
-                ("Intro", "intro", 0, False, "none", 0, 0),
-                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0, 0),
-                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_START_DELAY, CONSOLATION_END_DELAY),
-                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0, 0),
-                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0, 0),
-                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_START_DELAY, PRIZE_4TH_END_DELAY),
-                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_START_DELAY, PRIZE_5TH_END_DELAY),
-                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_START_DELAY, PRIZE_6TH_END_DELAY),
-                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
-                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
-                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY)
+                ("Intro", "intro", 0, False, "none", 0),
+                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0),
+                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_END_DELAY),
+                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0),
+                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0),
+                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_END_DELAY),
+                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_END_DELAY),
+                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_END_DELAY),
+                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
+                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
+                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY)
             ]
 
             video_files = []
@@ -1145,10 +1134,9 @@ async def run_pyrofork_bot():
             token = get_public_token()
             batch_count = 0
 
-            for p_name, engine, dur, is_4c, theme, start_delay, end_delay in tiers_to_render:
+            for p_name, engine, dur, is_4c, theme, end_delay in tiers_to_render:
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
                     
-                    # 1. Generate & Send Audio First
                     tts_text = tts_dict.get(p_name)
                     audio_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.wav")
                     
@@ -1160,13 +1148,12 @@ async def run_pyrofork_bot():
                         if batch_count >= 10:
                             token = get_public_token()
                             batch_count = 0
-                            await asyncio.sleep(1)
+                        await asyncio.sleep(2)
                         
                         if os.path.exists(audio_path):
                             await client.send_audio(chat_id=callback_query.message.chat.id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n`{draw_date}`")
                         await status_msg.delete()
 
-                    # 2. Render & Send Video
                     status_msg = await client.send_message(callback_query.message.chat.id, f"🎬 **Rendering {p_name} Video...**")
                     out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
                     
@@ -1174,7 +1161,7 @@ async def run_pyrofork_bot():
                     else:
                         full_heading = prize_headings.get(p_name, p_name)
                         if engine == "bang": await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur)
-                        else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, start_delay, end_delay)
+                        else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay)
                     
                     video_files.append(out_path)
                     if action == "rs":
@@ -1218,27 +1205,26 @@ async def run_pyrofork_bot():
             _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
             
             tier_config = [
-                ("Intro", "intro", 0, False, "none", 0, 0),
-                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0, 0),
-                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_START_DELAY, CONSOLATION_END_DELAY),
-                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0, 0),
-                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0, 0),
-                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_START_DELAY, PRIZE_4TH_END_DELAY),
-                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_START_DELAY, PRIZE_5TH_END_DELAY),
-                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_START_DELAY, PRIZE_6TH_END_DELAY),
-                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
-                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY),
-                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_START_DELAY, PRIZE_7_8_9_END_DELAY)
+                ("Intro", "intro", 0, False, "none", 0),
+                ("1st Prize", "bang", DURATION_1ST_PRIZE, False, "purple", 0),
+                ("Consolation Prize", "scroll", DURATION_CONSOLATION, False, "blue", CONSOLATION_END_DELAY),
+                ("2nd Prize", "bang", DURATION_2ND_PRIZE, False, "silver", 0),
+                ("3rd Prize", "bang", DURATION_3RD_PRIZE, False, "gold", 0),
+                ("4th Prize", "scroll", DURATION_4TH_PRIZE, False, "blue", PRIZE_4TH_END_DELAY),
+                ("5th Prize", "scroll", DURATION_5TH_PRIZE, False, "blue", PRIZE_5TH_END_DELAY),
+                ("6th Prize", "scroll", DURATION_6TH_PRIZE, False, "blue", PRIZE_6TH_END_DELAY),
+                ("7th Prize", "scroll", DURATION_7TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
+                ("8th Prize", "scroll", DURATION_8TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY),
+                ("9th Prize", "scroll", DURATION_9TH_PRIZE, True, "blue", PRIZE_7_8_9_END_DELAY)
             ]
 
             video_files = []
             token = get_public_token()
             batch_count = 0
             
-            for p_name, engine, dur, is_4c, theme, start_delay, end_delay in tier_config[start_idx : end_idx + 1]:
+            for p_name, engine, dur, is_4c, theme, end_delay in tier_config[start_idx : end_idx + 1]:
                 if engine == "intro" or (p_name in prizes and prizes[p_name]):
                     
-                    # 1. Generate & Send Audio First
                     tts_text = tts_dict.get(p_name)
                     audio_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.wav")
                     
@@ -1250,13 +1236,13 @@ async def run_pyrofork_bot():
                         if batch_count >= 10:
                             token = get_public_token()
                             batch_count = 0
-                            await asyncio.sleep(1)
+                        await asyncio.sleep(2)
                         
-                        if os.path.exists(audio_path):
-                            await client.send_audio(chat_id=message.chat.id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n`{draw_date}`")
+                        if not UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE:
+                            if os.path.exists(audio_path):
+                                await client.send_audio(chat_id=message.chat.id, audio=audio_path, caption=f"🔊 **{p_name} Voiceover**\n`{draw_date}`")
                         await status_msg.delete()
 
-                    # 2. Render & Send Video
                     status_msg = await client.send_message(message.chat.id, f"🎬 **Rendering {p_name} Video...**")
                     out_path = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}.mp4")
                     
@@ -1264,7 +1250,7 @@ async def run_pyrofork_bot():
                     else:
                         full_heading = prize_headings.get(p_name, p_name)
                         if engine == "bang": await asyncio.to_thread(render_bang_video, theme, full_heading, prizes[p_name][0], lottery_title, out_path, dur)
-                        else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, start_delay, end_delay)
+                        else: await asyncio.to_thread(render_scroll_video, theme, full_heading, prizes[p_name], lottery_title, out_path, dur, is_4c, end_delay)
                     
                     video_files.append(out_path)
                     if not UPLOAD_COMBINED_ONLY_IN_CUSTOM_RANGE:
