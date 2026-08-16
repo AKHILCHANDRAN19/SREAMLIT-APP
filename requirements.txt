@@ -7,3 +7,5 @@ tgcrypto
 opencv-python
 pillow
 numpy
+websockets
+indic-num2words
