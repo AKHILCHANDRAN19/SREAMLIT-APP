@@ -1400,42 +1400,36 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
 # ==========================================
 # 5. BOT PIPELINE & FFMPEG STITCHING (STREAM-COPY CONCAT)
 # ==========================================
+
 def compress_and_combine(video_files, final_output):
     if not video_files: return
     if len(video_files) == 1:
         shutil.copy(video_files[0], final_output)
         return
 
-    ts_files = []
-    # 1. Remux each MP4 into an intermediate .ts stream (Instant, fixes timescale bloat & audio drop)
+    # Low-memory, timestamp-normalized sequential concatenation
+    cmd = ["ffmpeg", "-y", "-threads", "2"]
+    filter_str = ""
     for i, vid in enumerate(video_files):
-        ts_path = vid.replace(".mp4", f"_{i}.ts")
-        cmd_ts = [
-            "ffmpeg", "-y", "-i", vid,
-            "-c", "copy", "-bsf:v", "h264_mp4toannexb", "-f", "mpegts",
-            ts_path
-        ]
-        subprocess.run(cmd_ts, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(ts_path):
-            ts_files.append(ts_path)
+        cmd.extend(["-i", vid])
+        filter_str += f"[{i}:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}];[{i}:a:0]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a{i}];"
+        
+    concat_inputs = "".join([f"[v{i}][a{i}]" for i in range(len(video_files))])
+    filter_complex = f"{filter_str}{concat_inputs}concat=n={len(video_files)}:v=1:a=1[v][a]"
+    
+    cmd.extend([
+        "-filter_complex", filter_complex,
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        final_output
+    ])
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # 2. Concat all .ts streams seamlessly into the final combined MP4
-    if ts_files:
-        concat_str = "concat:" + "|".join(ts_files)
-        cmd_final = [
-            "ffmpeg", "-y", "-i", concat_str,
-            "-c", "copy", "-bsf:a", "aac_adtstoasc",
-            final_output
-        ]
-        subprocess.run(cmd_final, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    # 3. Cleanup temporary .ts files and individual segment videos
-    for ts in ts_files:
-        if os.path.exists(ts):
-            os.remove(ts)
     for vid in video_files:
         if os.path.exists(vid):
             os.remove(vid)
+
 
 async def execute_result_pipeline(app, chat_id, target_url):
     msg = await app.send_message(chat_id, "🔎 **Fetching lottery draw data...**")
