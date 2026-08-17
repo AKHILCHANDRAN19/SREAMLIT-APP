@@ -20,6 +20,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 import intro
+import thumbnail
 import websockets
 import requests
 import json
@@ -670,63 +671,8 @@ def parse_lottery_result_page(target_url: str):
         return None, None, {}, None, {}, {}, None
 
 # ==========================================
-# 2. THUMBNAIL & YOUTUBE METADATA GENERATOR
+# 2. YOUTUBE METADATA & DYNAMIC TIMESTAMPS GENERATOR
 # ==========================================
-def generate_thumbnail(lottery_title, draw_date, out_path):
-    bg = pre_render_background(theme="purple")
-    draw = ImageDraw.Draw(bg)
-    
-    try:
-        d = datetime.strptime(draw_date, "%d-%m-%Y")
-        day_str = d.strftime("%A").upper()
-        date_formatted = d.strftime("%d-%m-%Y")
-    except Exception:
-        day_str = "TODAY"
-        date_formatted = draw_date
-
-    # 1. Top Header
-    draw.text((WIDTH//2, 85), "GOVERNMENT OF KERALA • OFFICIAL RESULTS", font=load_font("bold", 32), fill=(255, 215, 0, 255), anchor="mm")
-    
-    # 2. Main Title (3D Extrusion)
-    f_title = load_font("hero", 160)
-    cx, cy = WIDTH // 2, 280
-    for i in range(12, 0, -1):
-        draw.text((cx, cy + i), lottery_title, font=f_title, fill=(30, 0, 0, 255), anchor="mm")
-    draw.text((cx, cy), lottery_title, font=f_title, fill=(255, 255, 255, 255), stroke_width=4, stroke_fill=(255, 215, 0, 255), anchor="mm")
-    
-    # 3. Gold Ribbon
-    cx_r, cy_r = WIDTH // 2, 510
-    ribbon_w, ribbon_h = 1350, 160
-    r_x1, r_y1 = cx_r - ribbon_w // 2, cy_r - ribbon_h // 2
-    r_x2, r_y2 = cx_r + ribbon_w // 2, cy_r + ribbon_h // 2
-    
-    stops = [(0.0, (255, 245, 180)), (0.15, (255, 215, 0)), (0.85, (230, 150, 0)), (1.0, (180, 100, 0))]
-    grad = generate_vertical_gradient(ribbon_w, ribbon_h, stops)
-    bg.paste(grad, (r_x1, r_y1))
-    draw.rectangle([r_x1, r_y1, r_x2, r_y2], outline=(255, 255, 255, 255), width=4)
-    
-    f_ribbon = load_font("extrabold", 72)
-    draw.text((cx_r, cy_r + 4), "TODAY LIVE RESULT", font=f_ribbon, fill=(50, 5, 0, 255), anchor="mm")
-    draw.text((cx_r, cy_r), "TODAY LIVE RESULT", font=f_ribbon, fill=(255, 255, 255, 255), anchor="mm")
-
-    # 4. Bottom Cards: Draw Date & Day Badges
-    card_w, card_h = 600, 190
-    x_date = WIDTH // 2 - card_w - 35
-    y_cards = 780
-    
-    draw.rounded_rectangle([x_date, y_cards, x_date + card_w, y_cards + card_h], radius=25, fill=(15, 5, 25, 240), outline=(255, 215, 0, 220), width=4)
-    draw.text((x_date + card_w // 2, y_cards + 50), "DRAW DATE", font=load_font("bold", 36), fill=(180, 190, 210, 255), anchor="mm")
-    draw.text((x_date + card_w // 2, y_cards + 125), date_formatted, font=load_font("black", 60), fill=(255, 255, 255, 255), anchor="mm")
-    
-    x_day = WIDTH // 2 + 35
-    draw.rounded_rectangle([x_day, y_cards, x_day + card_w, y_cards + card_h], radius=25, fill=(15, 5, 25, 240), outline=(255, 215, 0, 220), width=4)
-    draw.text((x_day + card_w // 2, y_cards + 50), "DAY OF DRAW", font=load_font("bold", 36), fill=(180, 190, 210, 255), anchor="mm")
-    draw.text((x_day + card_w // 2, y_cards + 125), day_str, font=load_font("black", 60), fill=(255, 215, 0, 255), anchor="mm")
-
-    bg_rgb = bg.convert("RGB")
-    bg_rgb.save(out_path, "JPEG", quality=95)
-    return out_path
-
 def generate_youtube_package(lottery_title, draw_date, video_durations_map, prizes_data=None):
     code_match = re.search(r'([A-Za-z]{1,3}[-\s]*\d{1,4})', lottery_title)
     if code_match:
@@ -1325,7 +1271,6 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         except Exception: pass
     gc.collect()
 
-    # Apply Fade In / Fade Out Transitions
     v_filters = []
     if ENABLE_TRANSITIONS and TRANSITION_FADE_DURATION > 0:
         fade_out_st = max(0.0, calc_dur - TRANSITION_FADE_DURATION)
@@ -1605,8 +1550,8 @@ async def run_pyrofork_bot():
                 target_url = next((d['url'] for d in draws if d['date'] == target_date), f"https://www.keralalotteries.net/search?q={target_date}")
                 _, _, _, _, _, _, lottery_title = parse_lottery_result_page(target_url)
             
-            thumb_path = os.path.join(DOWNLOAD_DIR, f"thumb_{target_date}.jpg")
-            await asyncio.to_thread(generate_thumbnail, lottery_title, target_date, thumb_path)
+            thumb_path = os.path.join(DOWNLOAD_DIR, f"thumb_{target_date}.png")
+            await asyncio.to_thread(thumbnail.generate_thumbnail, lottery_title, target_date, thumb_path)
             
             if os.path.exists(thumb_path):
                 await client.send_photo(
