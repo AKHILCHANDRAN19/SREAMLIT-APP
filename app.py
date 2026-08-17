@@ -48,13 +48,13 @@ DURATION_1ST_PRIZE = 2.5         # Extra holding time after numbers are read
 DURATION_2ND_PRIZE = 2.5         # Extra holding time after numbers are read
 DURATION_3RD_PRIZE = 2.5         # Extra holding time after numbers are read
 
-DURATION_CONSOLATION = 20.0      # 16 seconds scroll after header
-DURATION_4TH_PRIZE = 30.0        # 25 seconds scroll after header
-DURATION_5TH_PRIZE = 25.0        # 25 seconds scroll after header/numbers
-DURATION_6TH_PRIZE = 35.0        # 25 seconds scroll after header
-DURATION_7TH_PRIZE = 110.0        # 1.30 minutes (90 seconds) scroll after header
-DURATION_8TH_PRIZE = 110.0        # 1.30 minutes (90 seconds) scroll after header
-DURATION_9TH_PRIZE = 110.0        # 1.30 minutes (90 seconds) scroll after header
+DURATION_CONSOLATION = 20.0      # Scroll duration for Consolation
+DURATION_4TH_PRIZE = 30.0        # Scroll duration for 4th Prize
+DURATION_5TH_PRIZE = 25.0        # Scroll duration for 5th Prize
+DURATION_6TH_PRIZE = 35.0        # Scroll duration for 6th Prize
+DURATION_7TH_PRIZE = 110.0       # Scroll duration for 7th Prize
+DURATION_8TH_PRIZE = 110.0       # Scroll duration for 8th Prize
+DURATION_9TH_PRIZE = 110.0       # Scroll duration for 9th Prize
 
 # 2. SCROLL SPEED SETTINGS (END DELAYS IN SECONDS)
 CONSOLATION_END_DELAY = 1.0
@@ -62,6 +62,10 @@ PRIZE_4TH_END_DELAY = 2.0
 PRIZE_5TH_END_DELAY = 2.0
 PRIZE_6TH_END_DELAY = 2.0
 PRIZE_7_8_9_END_DELAY = 2.0
+
+# 3. VIDEO TRANSITION / FADE SETTINGS (IN SECONDS)
+ENABLE_TRANSITIONS = True
+TRANSITION_FADE_DURATION = 0.5   # Fade In / Fade Out duration in seconds
 
 # ==========================================
 
@@ -666,8 +670,63 @@ def parse_lottery_result_page(target_url: str):
         return None, None, {}, None, {}, {}, None
 
 # ==========================================
-# 2. YOUTUBE METADATA & DYNAMIC TIMESTAMPS GENERATOR
+# 2. THUMBNAIL & YOUTUBE METADATA GENERATOR
 # ==========================================
+def generate_thumbnail(lottery_title, draw_date, out_path):
+    bg = pre_render_background(theme="purple")
+    draw = ImageDraw.Draw(bg)
+    
+    try:
+        d = datetime.strptime(draw_date, "%d-%m-%Y")
+        day_str = d.strftime("%A").upper()
+        date_formatted = d.strftime("%d-%m-%Y")
+    except Exception:
+        day_str = "TODAY"
+        date_formatted = draw_date
+
+    # 1. Top Header
+    draw.text((WIDTH//2, 85), "GOVERNMENT OF KERALA • OFFICIAL RESULTS", font=load_font("bold", 32), fill=(255, 215, 0, 255), anchor="mm")
+    
+    # 2. Main Title (3D Extrusion)
+    f_title = load_font("hero", 160)
+    cx, cy = WIDTH // 2, 280
+    for i in range(12, 0, -1):
+        draw.text((cx, cy + i), lottery_title, font=f_title, fill=(30, 0, 0, 255), anchor="mm")
+    draw.text((cx, cy), lottery_title, font=f_title, fill=(255, 255, 255, 255), stroke_width=4, stroke_fill=(255, 215, 0, 255), anchor="mm")
+    
+    # 3. Gold Ribbon
+    cx_r, cy_r = WIDTH // 2, 510
+    ribbon_w, ribbon_h = 1350, 160
+    r_x1, r_y1 = cx_r - ribbon_w // 2, cy_r - ribbon_h // 2
+    r_x2, r_y2 = cx_r + ribbon_w // 2, cy_r + ribbon_h // 2
+    
+    stops = [(0.0, (255, 245, 180)), (0.15, (255, 215, 0)), (0.85, (230, 150, 0)), (1.0, (180, 100, 0))]
+    grad = generate_vertical_gradient(ribbon_w, ribbon_h, stops)
+    bg.paste(grad, (r_x1, r_y1))
+    draw.rectangle([r_x1, r_y1, r_x2, r_y2], outline=(255, 255, 255, 255), width=4)
+    
+    f_ribbon = load_font("extrabold", 72)
+    draw.text((cx_r, cy_r + 4), "TODAY LIVE RESULT", font=f_ribbon, fill=(50, 5, 0, 255), anchor="mm")
+    draw.text((cx_r, cy_r), "TODAY LIVE RESULT", font=f_ribbon, fill=(255, 255, 255, 255), anchor="mm")
+
+    # 4. Bottom Cards: Draw Date & Day Badges
+    card_w, card_h = 600, 190
+    x_date = WIDTH // 2 - card_w - 35
+    y_cards = 780
+    
+    draw.rounded_rectangle([x_date, y_cards, x_date + card_w, y_cards + card_h], radius=25, fill=(15, 5, 25, 240), outline=(255, 215, 0, 220), width=4)
+    draw.text((x_date + card_w // 2, y_cards + 50), "DRAW DATE", font=load_font("bold", 36), fill=(180, 190, 210, 255), anchor="mm")
+    draw.text((x_date + card_w // 2, y_cards + 125), date_formatted, font=load_font("black", 60), fill=(255, 255, 255, 255), anchor="mm")
+    
+    x_day = WIDTH // 2 + 35
+    draw.rounded_rectangle([x_day, y_cards, x_day + card_w, y_cards + card_h], radius=25, fill=(15, 5, 25, 240), outline=(255, 215, 0, 220), width=4)
+    draw.text((x_day + card_w // 2, y_cards + 50), "DAY OF DRAW", font=load_font("bold", 36), fill=(180, 190, 210, 255), anchor="mm")
+    draw.text((x_day + card_w // 2, y_cards + 125), day_str, font=load_font("black", 60), fill=(255, 215, 0, 255), anchor="mm")
+
+    bg_rgb = bg.convert("RGB")
+    bg_rgb.save(out_path, "JPEG", quality=95)
+    return out_path
+
 def generate_youtube_package(lottery_title, draw_date, video_durations_map, prizes_data=None):
     code_match = re.search(r'([A-Za-z]{1,3}[-\s]*\d{1,4})', lottery_title)
     if code_match:
@@ -753,7 +812,6 @@ def generate_youtube_package(lottery_title, draw_date, video_durations_map, priz
             timestamps_lines.append(f"{ts_future} - 8th & 9th Prize Numbers")
         elif last_key == "8th Prize":
             timestamps_lines.append(f"{ts_future} - 9th Prize Numbers")
-        # If 9th Prize was rendered, NO trailing placeholder is added
 
     timestamps_text = "\n".join(timestamps_lines)
 
@@ -914,7 +972,7 @@ The prize winners are advised to verify the winning numbers with the results pub
 
     return title_1, title_2, description, tags
 
-async def broadcast_to_channel(client, text=None, video_path=None, audio_path=None, document=None, caption=""):
+async def broadcast_to_channel(client, text=None, video_path=None, audio_path=None, document=None, photo_path=None, caption=""):
     if not TARGET_CHANNEL_ID: return
     try:
         if text:
@@ -922,6 +980,8 @@ async def broadcast_to_channel(client, text=None, video_path=None, audio_path=No
             for chunk in chunks:
                 await client.send_message(TARGET_CHANNEL_ID, chunk)
                 await asyncio.sleep(0.4)
+        elif photo_path and os.path.exists(photo_path):
+            await client.send_photo(TARGET_CHANNEL_ID, photo=photo_path, caption=caption)
         elif video_path and os.path.exists(video_path):
             await client.send_video(TARGET_CHANNEL_ID, video=video_path, caption=caption)
         elif audio_path and os.path.exists(audio_path):
@@ -1144,7 +1204,6 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     audio_file = out_path.replace(".mp4", ".wav")
     audio_dur = get_audio_duration(audio_file)
     
-    # 1st, 2nd, 3rd Prize Duration: Voiceover Audio Duration + base_dur
     calc_dur = max(audio_dur + base_dur if audio_dur > 0 else 10.0, 6.0)
     total_frames = int(FPS * calc_dur)
     
@@ -1196,14 +1255,10 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         canvas = bg_asset.copy()
         draw = ImageDraw.Draw(canvas)
 
-        if time_sec > 0.0:
-            op = ease_out_expo(min(time_sec / 0.3, 1.0))
-            if op > 0.05:
-                draw.text((WIDTH//2, int(90 - (30 * (1 - op)))), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, int(255*op)), anchor="mm")
-                draw.text((WIDTH//2, int(165 - (30 * (1 - op)))), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, int(255*op)), anchor="mm")
-
-        if time_sec > 0.2:
-            canvas.alpha_composite(ribbon_asset)
+        # Draw Header & Ribbon from Frame 0
+        draw.text((WIDTH//2, 90), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, 255), anchor="mm")
+        draw.text((WIDTH//2, 165), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
+        canvas.alpha_composite(ribbon_asset)
 
         shake_dx, shake_dy = 0, 0
         if time_sec > (impact_time - 0.2):
@@ -1270,26 +1325,37 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         except Exception: pass
     gc.collect()
 
+    # Apply Fade In / Fade Out Transitions
+    v_filters = []
+    if ENABLE_TRANSITIONS and TRANSITION_FADE_DURATION > 0:
+        fade_out_st = max(0.0, calc_dur - TRANSITION_FADE_DURATION)
+        v_filters.append(f"fade=t=in:st=0:d={TRANSITION_FADE_DURATION}")
+        v_filters.append(f"fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}")
+    v_filter_str = ",".join(v_filters) if v_filters else "null"
+
     cmd = ["ffmpeg", "-y", "-i", raw_path]
     if os.path.exists(audio_file) and os.path.exists(BANG_AUDIO_BGM):
         delay_ms = int(impact_time * 1000)
         cmd.extend([
             "-i", audio_file, "-i", BANG_AUDIO_BGM, "-filter_complex", 
+            f"[0:v]{v_filter_str}[vout];"
             f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad[a1];"
             f"[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.25,adelay={delay_ms}|{delay_ms}[a2];"
             f"[a1][a2]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{calc_dur}[aout]", 
-            "-map", "0:v", "-map", "[aout]"
+            "-map", "[vout]", "-map", "[aout]"
         ])
     elif os.path.exists(audio_file):
         cmd.extend([
             "-i", audio_file, "-filter_complex",
+            f"[0:v]{v_filter_str}[vout];"
             f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,apad,atrim=0:{calc_dur}[aout]",
-            "-map", "0:v", "-map", "[aout]"
+            "-map", "[vout]", "-map", "[aout]"
         ])
     else:
         cmd.extend([
+            "-filter_complex", f"[0:v]{v_filter_str}[vout]",
             "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:d={calc_dur}",
-            "-map", "0:v", "-map", "1:a"
+            "-map", "[vout]", "-map", "1:a"
         ])
         
     cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", out_path])
@@ -1300,7 +1366,6 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     audio_file = out_path.replace(".mp4", ".wav")
     audio_dur = get_audio_duration(audio_file)
     
-    # Scroll animation starts strictly AFTER voiceover completes
     start_delay = start_delay_override if (start_delay_override and start_delay_override > 0) else (audio_dur if audio_dur > 0 else 2.0)
     calc_dur = start_delay + base_dur
     total_frames = int(FPS * calc_dur)
@@ -1338,10 +1403,10 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         canvas = bg_asset.copy()
         draw = ImageDraw.Draw(canvas)
 
-        h_op = ease_out_expo(min(max(time_sec / 0.5, 0.0), 1.0))
-        if h_op > 0.05:
-            draw.text((WIDTH//2, int(60 - (30 * (1 - h_op)))), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, int(255 * h_op)), anchor="mm")
-            draw.text((WIDTH//2, int(135 - (30 * (1 - h_op)))), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, int(255 * h_op)), anchor="mm")
+        # Draw Header & Ribbon from Frame 0
+        draw.text((WIDTH//2, 60), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, 255), anchor="mm")
+        draw.text((WIDTH//2, 135), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
+        canvas.alpha_composite(ribbon_asset)
 
         scroll_start = start_delay
         scroll_end = max(scroll_start + 0.5, calc_dur - end_delay)
@@ -1357,9 +1422,6 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         cards_layer.putalpha(ImageChops.multiply(cards_layer.split()[3], mask))
         canvas.alpha_composite(cards_layer)
 
-        if time_sec > 0.2:
-            canvas.alpha_composite(ribbon_asset)
-
         out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
 
         if progress_cb and frame % 30 == 0:
@@ -1372,25 +1434,35 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         except Exception: pass
     gc.collect()
 
+    v_filters = []
+    if ENABLE_TRANSITIONS and TRANSITION_FADE_DURATION > 0:
+        fade_out_st = max(0.0, calc_dur - TRANSITION_FADE_DURATION)
+        v_filters.append(f"fade=t=in:st=0:d={TRANSITION_FADE_DURATION}")
+        v_filters.append(f"fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}")
+    v_filter_str = ",".join(v_filters) if v_filters else "null"
+
     cmd = ["ffmpeg", "-y", "-i", raw_path]
     if os.path.exists(audio_file) and os.path.exists(SCROLL_AUDIO_BGM):
         cmd.extend([
             "-i", audio_file, "-i", SCROLL_AUDIO_BGM, "-filter_complex", 
+            f"[0:v]{v_filter_str}[vout];"
             f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad[vocal];"
             f"[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.15[bgm];"
             f"[vocal][bgm]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{calc_dur}[aout]", 
-            "-map", "0:v", "-map", "[aout]"
+            "-map", "[vout]", "-map", "[aout]"
         ])
     elif os.path.exists(audio_file):
         cmd.extend([
             "-i", audio_file, "-filter_complex",
+            f"[0:v]{v_filter_str}[vout];"
             f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,apad,atrim=0:{calc_dur}[aout]",
-            "-map", "0:v", "-map", "[aout]"
+            "-map", "[vout]", "-map", "[aout]"
         ])
     else:
         cmd.extend([
+            "-filter_complex", f"[0:v]{v_filter_str}[vout]",
             "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:d={calc_dur}",
-            "-map", "0:v", "-map", "1:a"
+            "-map", "[vout]", "-map", "1:a"
         ])
         
     cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", out_path])
@@ -1398,38 +1470,33 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     if os.path.exists(raw_path): os.remove(raw_path)
 
 # ==========================================
-# 5. BOT PIPELINE & FFMPEG STITCHING (STREAM-COPY CONCAT)
+# 5. BOT PIPELINE & FFMPEG STITCHING
 # ==========================================
-
 def compress_and_combine(video_files, final_output):
     if not video_files: return
     if len(video_files) == 1:
         shutil.copy(video_files[0], final_output)
         return
 
-    # Low-memory, timestamp-normalized sequential concatenation
-    cmd = ["ffmpeg", "-y", "-threads", "2"]
-    filter_str = ""
-    for i, vid in enumerate(video_files):
-        cmd.extend(["-i", vid])
-        filter_str += f"[{i}:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}];[{i}:a:0]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a{i}];"
-        
-    concat_inputs = "".join([f"[v{i}][a{i}]" for i in range(len(video_files))])
-    filter_complex = f"{filter_str}{concat_inputs}concat=n={len(video_files)}:v=1:a=1[v][a]"
-    
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+    # Lossless Stream-Copy Concatenation
+    list_path = os.path.join(DOWNLOAD_DIR, "concat_list.txt")
+    with open(list_path, "w") as f:
+        for vid in video_files:
+            f.write(f"file '{vid}'\n")
+
+    cmd = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+        "-c", "copy",
         final_output
-    ])
+    ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    if os.path.exists(list_path):
+        os.remove(list_path)
 
     for vid in video_files:
         if os.path.exists(vid):
             os.remove(vid)
-
 
 async def execute_result_pipeline(app, chat_id, target_url):
     msg = await app.send_message(chat_id, "🔎 **Fetching lottery draw data...**")
@@ -1492,6 +1559,7 @@ async def run_pyrofork_bot():
                 "**🌟 Available Commands:**\n"
                 "• 🚀 `/generate` - Fetch today's result & render pipeline\n"
                 "• 📅 `/gencustom` - Select from last 10 draw dates\n"
+                "• 🖼️ `/genthumb` - Generate YouTube thumbnail for a draw date\n"
                 "• 🔗 `/combine` - Stitch uploaded videos together\n"
                 "• ℹ️ `/start` - Show this menu"
             )
@@ -1512,6 +1580,46 @@ async def run_pyrofork_bot():
                 d_str = item['date']
                 buttons.append([InlineKeyboardButton(f"📅 {d_str} | {item['title'][:20]}", callback_data=f"get_{d_str}")])
             await message.reply_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(buttons))
+
+        @app.on_message(filters.command("genthumb") & filters.private)
+        async def handle_genthumb(client, message):
+            draws = fetch_last_10_draws()
+            text_lines = ["🖼️ **Select a draw date to generate Thumbnail:**\n"]
+            buttons = []
+            for item in draws:
+                d_str = item['date']
+                buttons.append([InlineKeyboardButton(f"📅 {d_str} | {item['title'][:20]}", callback_data=f"th_{d_str}")])
+            await message.reply_text("\n".join(text_lines), reply_markup=InlineKeyboardMarkup(buttons))
+
+        @app.on_callback_query(filters.regex(r"^th_(\d{2}-\d{2}-\d{4})"))
+        async def handle_thumb_callback(client, callback_query):
+            target_date = callback_query.matches[0].group(1)
+            await callback_query.answer()
+            status_msg = await callback_query.message.reply_text(f"🎨 **Generating YouTube Thumbnail for `{target_date}`...**")
+            
+            if target_date in GLOBAL_STATE.scraped_cache:
+                c_data = GLOBAL_STATE.scraped_cache[target_date]
+                lottery_title = c_data["lottery_title"]
+            else:
+                draws = fetch_last_10_draws()
+                target_url = next((d['url'] for d in draws if d['date'] == target_date), f"https://www.keralalotteries.net/search?q={target_date}")
+                _, _, _, _, _, _, lottery_title = parse_lottery_result_page(target_url)
+            
+            thumb_path = os.path.join(DOWNLOAD_DIR, f"thumb_{target_date}.jpg")
+            await asyncio.to_thread(generate_thumbnail, lottery_title, target_date, thumb_path)
+            
+            if os.path.exists(thumb_path):
+                await client.send_photo(
+                    chat_id=callback_query.message.chat.id,
+                    photo=thumb_path,
+                    caption=f"🖼️ **YouTube Thumbnail** • `{lottery_title}` (`{target_date}`)"
+                )
+                await broadcast_to_channel(
+                    client,
+                    photo_path=thumb_path,
+                    caption=f"🖼️ **YouTube Thumbnail** • `{lottery_title}` (`{target_date}`)"
+                )
+            await status_msg.delete()
 
         @app.on_callback_query(filters.regex(r"^get_(\d{2}-\d{2}-\d{4})"))
         async def handle_get_callback(client, callback_query):
