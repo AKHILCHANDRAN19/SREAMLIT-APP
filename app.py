@@ -457,36 +457,63 @@ def concat_wav_files(file1, file2, out_file):
         return False
 
 # ==========================================
-# 1. SCRAPING LOGIC (UNIVERSAL ALL-DAYS PARSER)
+# 1. SCRAPING LOGIC (BLOGGER JSON API PARSER)
 # ==========================================
+YEAR_BLACKLIST = {"2024", "2025", "2026", "2027", "2028", "2029", "2030"}
+
 def fetch_last_10_draws():
-    base_url = "https://www.keralalotteries.net/?m=1"
+    """Fetches real-time last 10 draws from Blogger JSON API, bypassing static landing posts."""
+    cache_buster = int(time.time())
+    url = f"https://www.keralalotteries.net/feeds/posts/default?alt=json&max-results=10&_nocache={cache_buster}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
     draws = []
     try:
-        res = http_get(base_url)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        
-        for a_tag in soup.find_all('a', href=True):
-            href = a_tag['href']
-            if re.search(r'/\d{4}/\d{2}/.*lottery.*\.html', href) and 'today-kerala-lottery-result-live' not in href:
-                date_match = re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', href) or \
-                             re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', a_tag.get_text())
-                if date_match:
-                    d_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
-                    raw_title = a_tag.get_text(strip=True)
-                    raw_title = re.sub(r'(?i)\b(?:official result|results? today|live|kerala lottery|results?)\b', '', raw_title)
-                    raw_title = re.sub(r'\s+', ' ', raw_title).strip()
-                    
-                    existing = next((d for d in draws if d['date'] == d_str), None)
-                    if not existing:
-                        draws.append({'date': d_str, 'title': raw_title or d_str, 'url': href})
-                    elif existing and re.match(r'^\d{2}[./-]\d{2}[./-]\d{4}$', existing['title']) and raw_title and not re.match(r'^\d{2}[./-]\d{2}[./-]\d{4}$', raw_title):
-                        existing['title'] = raw_title
+        if USE_CURL_CFFI:
+            res = cffi_requests.get(url, headers=headers, impersonate="chrome", timeout=10)
+        else:
+            res = standard_requests.get(url, headers=headers, timeout=10)
+            
+        data = res.json()
+        entries = data.get("feed", {}).get("entry", [])
 
-            if len(draws) >= 10: break
+        for entry in entries:
+            raw_title = entry.get("title", {}).get("$t", "")
+            
+            # Find the canonical web URL
+            post_url = ""
+            for link in entry.get("link", []):
+                if link.get("rel") == "alternate":
+                    post_url = link.get("href", "")
+                    break
+
+            # 1. Skip generic static landing post
+            if "today-kerala-lottery-result-live" in post_url:
+                continue
+
+            # 2. Extract Date (DD-MM-YYYY)
+            date_match = re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', raw_title) or \
+                         re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', post_url)
+            if not date_match:
+                continue
+
+            d_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
+
+            # 3. Clean Title
+            clean_title = re.sub(r'(?i)\b(?:Kerala Lotteries Results?:?|Kerala Lottery Results?:?|Lottery Result|Official Result|Results? Today|Live)\b', '', raw_title)
+            clean_title = re.sub(r'\d{2}[./-]\d{2}[./-]\d{4}', '', clean_title)
+            clean_title = re.sub(r'[:—\-~]', ' ', clean_title)
+            clean_title = re.sub(r'\s+', ' ', clean_title).strip().upper()
+
+            if not any(d['date'] == d_str for d in draws):
+                draws.append({'date': d_str, 'title': clean_title or d_str, 'url': post_url})
+
+            if len(draws) >= 10:
+                break
+
         return draws
     except Exception as e:
-        GLOBAL_STATE.log(f"Error fetching draws: {e}")
+        GLOBAL_STATE.log(f"Error fetching JSON feed draws: {e}")
         return []
 
 def clean_prize_heading(raw_str):
@@ -515,56 +542,62 @@ def parse_lottery_result_page(target_url: str):
         clean_lottery_title = re.sub(blacklist_regex, '', raw_title)
         clean_lottery_title = re.sub(r'\s+', ' ', clean_lottery_title).strip().upper()
 
-        for tag in post_body.find_all(['br', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li', 'table']):
-            tag.insert_after('\n')
-        
-        full_text = post_body.get_text(separator=' ').replace('\xa0', ' ')
-        lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
+        full_raw_text = post_body.get_text(separator=' ').replace('\xa0', ' ')
 
+        # Extract Date
         date_match = re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', target_url) or \
                      re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', raw_title) or \
-                     re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', full_text)
-        
-        if date_match:
-            draw_date = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
-        else:
-            draw_date = "N/A"
+                     re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', full_raw_text)
+        draw_date = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}" if date_match else "N/A"
 
+        # Malayalam Name Extraction (Ignores "Live Draw Started" box)
         malayalam_name_series = clean_lottery_title
-        for i, line in enumerate(lines):
-            if 'തത്സമയ നറുക്കെടുപ്പ്' in line and 'റിസൾട്ട്' in line:
-                parts = line.split('റിസൾട്ട്')
-                if len(parts) > 1 and parts[1].strip():
-                    potential_name = parts[1].strip()
-                elif i + 1 < len(lines):
-                    potential_name = lines[i+1].strip()
-                else:
-                    potential_name = clean_lottery_title
-                
-                potential_name = re.sub(r'[\.\-]', ' ', potential_name)
-                malayalam_name_series = re.sub(r'\s+', ' ', potential_name).strip()
-                break
+        ml_patterns = [
+            r'ഇന്നത്തെ\s*കേരളാ\s*ലോട്ടറി\s*റിസൾട്ട്\s*([^\n<]+)',
+            r'ധനലക്ഷ്മി\s*[^\n<]+',
+            r'സ്ത്രീ\s*ശക്തി\s*[^\n<]+',
+            r'ഭാഗ്യതാര\s*[^\n<]+',
+            r'കാരുണ്യ\s*പ്ലസ്\s*[^\n<]+',
+            r'സുവർണ\s*കേരളം\s*[^\n<]+',
+            r'കാരുണ്യ\s*[^\n<]+',
+            r'സമൃദ്ധി\s*[^\n<]+'
+        ]
+        for pat in ml_patterns:
+            ml_m = re.search(pat, full_raw_text)
+            if ml_m:
+                cand = ml_m.group(0 if '(' not in pat else 1).strip()
+                cand = re.sub(r'(?i)\b(?:Live|@\s*\d+:\d+[a-z]*|Winners|Numbers|Date of Draw|ഫലം)\b', '', cand)
+                cand = re.sub(r'[:—\-~]', ' ', cand)
+                cand = re.sub(r'\s+', ' ', cand).strip()
+                if len(cand) >= 3 and "ആരംഭിച്ചു" not in cand and "തുടരുക" not in cand:
+                    malayalam_name_series = cand
+                    break
 
-        series_match = re.search(r'Today Lottery Series:\s*([A-Z0-9,\s]+)', full_text)
+        series_match = re.search(r'Today Lottery Series:\s*([A-Z0-9,\s]+)', full_raw_text)
         series_str = series_match.group(1).strip() if series_match else "N/A"
 
+        # Prepare line-by-line parsing
+        for tag in post_body.find_all(['br', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li', 'table']):
+            tag.insert_after('\n')
+        lines = [re.sub(r'\s+', ' ', line).strip() for line in post_body.get_text().split('\n') if line.strip()]
+
         prize_headers = ["1st Prize", "Consolation Prize", "2nd Prize", "3rd Prize", "4th Prize", "5th Prize", "6th Prize", "7th Prize", "8th Prize", "9th Prize"]
-        prizes_data = {}
+        prizes_data = {k: [] for k in prize_headers}
         prize_headings = {}
         prize_money_ml = {}
         current_prize_key = None
 
         for line in lines:
-            if any(sp in line.lower() for sp in ["prize winners are advised to verify", "government gazette", "tomorrow draw details"]): break
+            # Stop before repeated numbers / disclaimers
+            if any(sp in line.lower() for sp in ["prize winners are advised to verify", "government gazette", "tomorrow draw details", "repeated draw numbers"]):
+                break
             
             matched_header = next((ph for ph in prize_headers if ph.lower() in line.lower()), None)
             if matched_header:
                 current_prize_key = matched_header
-                if current_prize_key not in prizes_data:
-                    prizes_data[current_prize_key] = []
+                if current_prize_key not in prize_headings:
                     cln_head = clean_prize_heading(line)
                     prize_headings[current_prize_key] = cln_head
-                    
                     if '₹' in cln_head:
                         money_str = cln_head.split('₹')[-1].strip()
                         prize_money_ml[current_prize_key] = get_malayalam_prize_money(money_str)
@@ -573,8 +606,11 @@ def parse_lottery_result_page(target_url: str):
                 continue
 
             if current_prize_key:
-                if (line.startswith("(") and line.endswith(")")) or line in ["...", "---"]: continue
-                
+                if (line.startswith("(") and line.endswith(")")) or line in ["...", "---", "***"]:
+                    continue
+                if "Results Loading" in line:
+                    continue
+
                 if current_prize_key in ["1st Prize", "2nd Prize", "3rd Prize"]:
                     ticket_match = re.search(r'([A-Za-z]{2}\s*\d{6}(?:\s*\([A-Za-z\s]+\))?)', line)
                     if ticket_match:
@@ -585,9 +621,14 @@ def parse_lottery_result_page(target_url: str):
                         prizes_data[current_prize_key].extend(cons_tickets)
                 else:
                     four_digits = re.findall(r'\b\d{4}\b', line)
-                    if four_digits:
-                        prizes_data[current_prize_key].extend(four_digits)
+                    # Filter out year numbers (2024-2030) so years never become winning numbers
+                    filtered = [d for d in four_digits if d not in YEAR_BLACKLIST]
+                    if filtered:
+                        prizes_data[current_prize_key].extend(filtered)
 
+        prizes_data = {k: v for k, v in prizes_data.items() if v}
+
+        # Build output message
         msg_output = [f"🎟️ **{clean_lottery_title}**", f"📅 **Date:** `{draw_date}`", f"🔢 **Series:** `{series_str}`", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"]
         prize_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣")]
 
@@ -596,9 +637,8 @@ def parse_lottery_result_page(target_url: str):
                 formatted_val = "  ".join(prizes_data[p_key]) if "Prize" in p_key and "1st" not in p_key and "2nd" not in p_key and "3rd" not in p_key and "Consolation" not in p_key else "\n".join(prizes_data[p_key])
                 msg_output.append(f"{emoji} **{prize_headings.get(p_key, p_key)}**\n`{formatted_val}`\n")
 
-        # --- 100% PURE MALAYALAM TTS GENERATION (ZERO ENGLISH) ---
+        # Build 100% Malayalam TTS Output
         tts_output = {}
-        
         try:
             d = datetime.strptime(draw_date, "%d-%m-%Y")
             y_sp = ML_YEARS.get(d.year, get_malayalam_prize_money(str(d.year)))
@@ -616,8 +656,6 @@ def parse_lottery_result_page(target_url: str):
             "3rd Prize": "മൂന്നാം", "4th Prize": "നാലാം", "5th Prize": "അഞ്ചാം",
             "6th Prize": "ആറാം", "7th Prize": "ഏഴാം", "8th Prize": "എട്ടാം", "9th Prize": "ഒമ്പതാം"
         }
-        
-        # Read numbers only for 1st, 2nd, 3rd, and 5th Prizes (Consolation reads only money header)
         two_step_prizes = ["1st Prize", "2nd Prize", "3rd Prize", "5th Prize"]
         tts_file_blocks = [f"[Intro Header]\n{dynamic_intro}"]
 
@@ -628,44 +666,39 @@ def parse_lottery_result_page(target_url: str):
                 
                 if "Consolation" in p_key:
                     header_sentence = f"{money_txt} രൂപയുടെ {p_name_ml} സമ്മാനം ലഭിച്ച അക്കങ്ങൾ"
-                elif p_key in ["1st Prize", "2nd Prize", "3rd Prize"]:
-                    if p_key == "1st Prize":
-                        header_sentence = f"{dynamic_intro} {money_txt} രൂപയുടെ {p_name_ml} സമ്മാനത്തിന് അർഹമായ അക്കങ്ങൾ താഴെ പറയുന്നവയാണ്"
-                    else:
-                        header_sentence = f"{money_txt} രൂപയുടെ {p_name_ml} സമ്മാനത്തിന് അർഹമായ അക്കങ്ങൾ താഴെ പറയുന്നവയാണ്"
+                elif p_key == "1st Prize":
+                    header_sentence = f"{dynamic_intro} {money_txt} രൂപയുടെ {p_name_ml} സമ്മാനത്തിന് അർഹമായ അക്കങ്ങൾ താഴെ പറയുന്നവയാണ്"
+                elif p_key in ["2nd Prize", "3rd Prize"]:
+                    header_sentence = f"{money_txt} രൂപയുടെ {p_name_ml} സമ്മാനത്തിന് അർഹമായ അക്കങ്ങൾ താഴെ പറയുന്നവയാണ്"
                 else:
                     header_sentence = f"{money_txt} രൂപയുടെ {p_name_ml} സമ്മാനത്തിന് അർഹമായ അവസാന നാല് അക്കങ്ങൾ"
 
                 if p_key in two_step_prizes:
                     num_spoken_list = [to_tts_format(x) for x in prizes_data[p_key]]
                     numbers_sentence = " , ".join(num_spoken_list)
-                    tts_output[p_key] = {
-                        "header": header_sentence,
-                        "numbers": numbers_sentence
-                    }
+                    tts_output[p_key] = {"header": header_sentence, "numbers": numbers_sentence}
                     tts_file_blocks.append(f"[{p_key} Header]\n{header_sentence}\n\n[{p_key} Numbers]\n{numbers_sentence}")
                 else:
-                    tts_output[p_key] = {
-                        "header": header_sentence,
-                        "numbers": ""
-                    }
+                    tts_output[p_key] = {"header": header_sentence, "numbers": ""}
                     tts_file_blocks.append(f"[{p_key} Header]\n{header_sentence}")
-        
+
         tts_string = "\n\n".join(tts_file_blocks)
-        
-        GLOBAL_STATE.scraped_cache[draw_date] = {
-            "text_msg": "\n".join(msg_output),
-            "tts_txt": tts_string,
-            "tts_dict": tts_output,
-            "draw_date": draw_date,
-            "prizes": prizes_data,
-            "prize_headings": prize_headings,
-            "lottery_title": clean_lottery_title,
-            "target_url": target_url
-        }
+
+        # Cache ONLY when 9th prize is completed (never cache partial live data)
+        is_fully_complete = "9th Prize" in prizes_data and len(prizes_data["9th Prize"]) >= 100
+        if is_fully_complete:
+            GLOBAL_STATE.scraped_cache[draw_date] = {
+                "text_msg": "\n".join(msg_output),
+                "tts_txt": tts_string,
+                "tts_dict": tts_output,
+                "draw_date": draw_date,
+                "prizes": prizes_data,
+                "prize_headings": prize_headings,
+                "lottery_title": clean_lottery_title,
+                "target_url": target_url
+            }
 
         return "\n".join(msg_output), tts_string, tts_output, draw_date, prizes_data, prize_headings, clean_lottery_title
-
     except Exception as e:
         GLOBAL_STATE.log(f"Parsing Error: {e}")
         return None, None, {}, None, {}, {}, None
@@ -1551,8 +1584,12 @@ async def run_pyrofork_bot():
                 lottery_title = c_data["lottery_title"]
             else:
                 draws = fetch_last_10_draws()
-                target_url = next((d['url'] for d in draws if d['date'] == target_date), f"https://www.keralalotteries.net/search?q={target_date}")
-                _, _, _, _, _, _, lottery_title = parse_lottery_result_page(target_url)
+                target_entry = next((d for d in draws if d['date'] == target_date), None)
+                target_url = target_entry['url'] if target_entry else (draws[0]['url'] if draws else "")
+                if target_url:
+                    _, _, _, _, _, _, lottery_title = parse_lottery_result_page(target_url)
+                else:
+                    lottery_title = "KERALA LOTTERY"
             
             thumb_path = os.path.join(DOWNLOAD_DIR, f"thumb_{target_date}.png")
             await asyncio.to_thread(thumbnail.generate_thumbnail, lottery_title, target_date, thumb_path)
@@ -1575,8 +1612,12 @@ async def run_pyrofork_bot():
             await callback_query.answer()
             target_date = callback_query.matches[0].group(1)
             draws = fetch_last_10_draws()
-            target_url = next((d['url'] for d in draws if d['date'] == target_date), f"https://www.keralalotteries.net/search?q={target_date}")
-            await execute_result_pipeline(app, callback_query.message.chat.id, target_url)
+            target_entry = next((d for d in draws if d['date'] == target_date), None)
+            target_url = target_entry['url'] if target_entry else (draws[0]['url'] if draws else "")
+            if target_url:
+                await execute_result_pipeline(app, callback_query.message.chat.id, target_url)
+            else:
+                await callback_query.message.reply_text("❌ Could not locate draw post URL.")
 
         @app.on_callback_query(filters.regex(r"^vn_"))
         async def handle_video_no(client, callback_query):
@@ -1685,6 +1726,7 @@ async def run_pyrofork_bot():
             action, tier_idx, draw_date = callback_query.matches[0].group(1), int(callback_query.matches[0].group(2)), callback_query.matches[0].group(3)
             await callback_query.message.edit_text("🔎 **Fetching draw results for rendering...**")
             
+            # Always fetch fresh data on render to ensure real-time live draws are captured
             if draw_date in GLOBAL_STATE.scraped_cache:
                 c_data = GLOBAL_STATE.scraped_cache[draw_date]
                 tts_dict = c_data["tts_dict"]
@@ -1693,8 +1735,12 @@ async def run_pyrofork_bot():
                 lottery_title = c_data["lottery_title"]
             else:
                 draws = fetch_last_10_draws()
-                target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
-                _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+                target_entry = next((d for d in draws if d['date'] == draw_date), None)
+                target_url = target_entry['url'] if target_entry else (draws[0]['url'] if draws else "")
+                if target_url:
+                    _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+                else:
+                    return await callback_query.message.edit_text("❌ Could not locate draw post URL.")
             
             tier_config = [
                 ("Intro", "intro", 0, False, "none", 0),
@@ -1773,8 +1819,12 @@ async def run_pyrofork_bot():
                 lottery_title = c_data["lottery_title"]
             else:
                 draws = fetch_last_10_draws()
-                target_url = next((d['url'] for d in draws if d['date'] == draw_date), f"https://www.keralalotteries.net/search?q={draw_date}")
-                _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+                target_entry = next((d for d in draws if d['date'] == draw_date), None)
+                target_url = target_entry['url'] if target_entry else (draws[0]['url'] if draws else "")
+                if target_url:
+                    _, _, tts_dict, draw_date, prizes, prize_headings, lottery_title = parse_lottery_result_page(target_url)
+                else:
+                    return await message.reply_text("❌ Could not locate draw post URL.")
             
             tier_config = [
                 ("Intro", "intro", 0, False, "none", 0),
