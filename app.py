@@ -519,17 +519,22 @@ def parse_lottery_result_page(target_url: str):
             tag.insert_after('\n')
         
         full_text = post_body.get_text(separator=' ').replace('\xa0', ' ')
-        lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
+        raw_lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
 
+        # Filter out live loading phrases
+        lines = [
+            l for l in raw_lines 
+            if not any(ign in l.lower() for ign in ["live draw started", "keep refreshing", "results loading", "തത്സമയ നറുക്കെടുപ്പ് ആരംഭിച്ചു", "പേജ് റീഫ്രഷ്"])
+        ]
+
+        # Universal multi-source Date Extraction
         date_match = re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', target_url) or \
                      re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', raw_title) or \
                      re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', full_text)
         
-        if date_match:
-            draw_date = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
-        else:
-            draw_date = "N/A"
+        draw_date = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}" if date_match else "N/A"
 
+        # Native Malayalam Series Name Extraction
         malayalam_name_series = clean_lottery_title
         for i, line in enumerate(lines):
             if 'തത്സമയ നറുക്കെടുപ്പ്' in line and 'റിസൾട്ട്' in line:
@@ -554,10 +559,28 @@ def parse_lottery_result_page(target_url: str):
         prize_money_ml = {}
         current_prize_key = None
 
+        # Comprehensive footer phrases that signal the end of prize tables
+        footer_stop_phrases = [
+            "prize winners are advised",
+            "government gazette",
+            "tomorrow draw",
+            "tomorrow's draw",
+            "result (today) date",
+            "repeated draw numbers",
+            "kerala state lotteries results",
+            "previous lottery results",
+            "results loading please wait",
+            "next upcoming bumper",
+            "kerala lottery result yesterday"
+        ]
+
         for line in lines:
-            if any(sp in line.lower() for sp in ["prize winners are advised to verify", "government gazette", "tomorrow draw details"]): break
+            line_l = line.lower()
+            if any(sp in line_l for sp in footer_stop_phrases):
+                current_prize_key = None
+                break
             
-            matched_header = next((ph for ph in prize_headers if ph.lower() in line.lower()), None)
+            matched_header = next((ph for ph in prize_headers if ph.lower() in line_l), None)
             if matched_header:
                 current_prize_key = matched_header
                 if current_prize_key not in prizes_data:
@@ -575,6 +598,10 @@ def parse_lottery_result_page(target_url: str):
             if current_prize_key:
                 if (line.startswith("(") and line.endswith(")")) or line in ["...", "---"]: continue
                 
+                # Exclude any line containing dates or years (like 19-08-2026 or 2026)
+                if re.search(r'\d{2}[./-]\d{2}[./-]\d{4}', line) or "date:" in line_l or "draw on" in line_l:
+                    continue
+
                 if current_prize_key in ["1st Prize", "2nd Prize", "3rd Prize"]:
                     ticket_match = re.search(r'([A-Za-z]{2}\s*\d{6}(?:\s*\([A-Za-z\s]+\))?)', line)
                     if ticket_match:
@@ -584,9 +611,13 @@ def parse_lottery_result_page(target_url: str):
                     if cons_tickets:
                         prizes_data[current_prize_key].extend(cons_tickets)
                 else:
+                    # 4th through 9th Prizes: 4-digit numbers strictly ignoring year 2024-2030 if present in text
                     four_digits = re.findall(r'\b\d{4}\b', line)
                     if four_digits:
-                        prizes_data[current_prize_key].extend(four_digits)
+                        # Exclude stray year tokens if they match common year formats
+                        valid_digits = [d for d in four_digits if not (d.startswith("202") and len(four_digits) == 1 and ("date" in line_l or "result" in line_l))]
+                        if valid_digits:
+                            prizes_data[current_prize_key].extend(valid_digits)
 
         msg_output = [f"🎟️ **{clean_lottery_title}**", f"📅 **Date:** `{draw_date}`", f"🔢 **Series:** `{series_str}`", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"]
         prize_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣")]
@@ -596,9 +627,8 @@ def parse_lottery_result_page(target_url: str):
                 formatted_val = "  ".join(prizes_data[p_key]) if "Prize" in p_key and "1st" not in p_key and "2nd" not in p_key and "3rd" not in p_key and "Consolation" not in p_key else "\n".join(prizes_data[p_key])
                 msg_output.append(f"{emoji} **{prize_headings.get(p_key, p_key)}**\n`{formatted_val}`\n")
 
-        # --- 100% PURE MALAYALAM TTS GENERATION (ZERO ENGLISH) ---
+        # --- 100% PURE MALAYALAM TTS GENERATION ---
         tts_output = {}
-        
         try:
             d = datetime.strptime(draw_date, "%d-%m-%Y")
             y_sp = ML_YEARS.get(d.year, get_malayalam_prize_money(str(d.year)))
@@ -617,7 +647,6 @@ def parse_lottery_result_page(target_url: str):
             "6th Prize": "ആറാം", "7th Prize": "ഏഴാം", "8th Prize": "എട്ടാം", "9th Prize": "ഒമ്പതാം"
         }
         
-        # Read numbers only for 1st, 2nd, 3rd, and 5th Prizes (Consolation reads only money header)
         two_step_prizes = ["1st Prize", "2nd Prize", "3rd Prize", "5th Prize"]
         tts_file_blocks = [f"[Intro Header]\n{dynamic_intro}"]
 
@@ -671,7 +700,7 @@ def parse_lottery_result_page(target_url: str):
         return None, None, {}, None, {}, {}, None
 
 # ==========================================
-# 2. YOUTUBE METADATA & DYNAMIC TIMESTAMPS GENERATOR
+# 2. THUMBNAIL & YOUTUBE METADATA GENERATOR
 # ==========================================
 def generate_youtube_package(lottery_title, draw_date, video_durations_map, prizes_data=None):
     code_match = re.search(r'([A-Za-z]{1,3}[-\s]*\d{1,4})', lottery_title)
@@ -1880,3 +1909,4 @@ with col2:
     st.subheader("📜 Live Process Console")
     log_area = st.empty()
     log_area.code("\n".join(GLOBAL_STATE.log_history) if GLOBAL_STATE.log_history else "System ready. Waiting for draw commands...", language="text")
+#Look in this script where to edit for 9th prize to not happen 2026 issue  only give the small piece of code to edit where and what in which line
