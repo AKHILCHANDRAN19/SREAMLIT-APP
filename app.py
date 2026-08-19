@@ -457,7 +457,7 @@ def concat_wav_files(file1, file2, out_file):
         return False
 
 # ==========================================
-# 1. SCRAPING LOGIC (UNIVERSAL ALL-DAYS PARSER)
+# 1. SCRAPING LOGIC (UNIVERSAL ALL-DAYS & LIVE PARSER)
 # ==========================================
 def fetch_last_10_draws():
     base_url = "https://www.keralalotteries.net/?m=1"
@@ -466,6 +466,21 @@ def fetch_last_10_draws():
         res = http_get(base_url)
         soup = BeautifulSoup(res.text, 'html.parser')
         
+        # 1. Check direct post titles & links first (catches today's live draw instantly)
+        for h1 in soup.find_all(['h1', 'h2', 'h3'], class_=re.compile(r'post-title|entry-title')):
+            a_tag = h1.find('a', href=True)
+            if a_tag:
+                href = a_tag['href']
+                text = a_tag.get_text(strip=True)
+                date_match = re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', href) or \
+                             re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', text)
+                if date_match and 'today-kerala-lottery-result-live' not in href:
+                    d_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
+                    title = re.sub(r'(?i)\b(?:official result|results? today|live|kerala lottery|results?)\b', '', text).strip()
+                    if not any(d['date'] == d_str for d in draws):
+                        draws.append({'date': d_str, 'title': title or d_str, 'url': href})
+
+        # 2. Check table and archive links
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href']
             if re.search(r'/\d{4}/\d{2}/.*lottery.*\.html', href) and 'today-kerala-lottery-result-live' not in href:
@@ -474,8 +489,7 @@ def fetch_last_10_draws():
                 if date_match:
                     d_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
                     raw_title = a_tag.get_text(strip=True)
-                    raw_title = re.sub(r'(?i)\b(?:official result|results? today|live|kerala lottery|results?)\b', '', raw_title)
-                    raw_title = re.sub(r'\s+', ' ', raw_title).strip()
+                    raw_title = re.sub(r'(?i)\b(?:official result|results? today|live|kerala lottery|results?)\b', '', raw_title).strip()
                     
                     existing = next((d for d in draws if d['date'] == d_str), None)
                     if not existing:
@@ -515,10 +529,8 @@ def parse_lottery_result_page(target_url: str):
         clean_lottery_title = re.sub(blacklist_regex, '', raw_title)
         clean_lottery_title = re.sub(r'\s+', ' ', clean_lottery_title).strip().upper()
 
-        for tag in post_body.find_all(['br', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li', 'table']):
-            tag.insert_after('\n')
-        
-        full_text = post_body.get_text(separator=' ').replace('\xa0', ' ')
+        # Native clean line extraction with separator='\n' (No DOM corruption)
+        full_text = post_body.get_text(separator='\n').replace('\xa0', ' ')
         raw_lines = [re.sub(r'\s+', ' ', line).strip() for line in full_text.split('\n') if line.strip()]
 
         # Filter out live loading phrases
@@ -527,14 +539,14 @@ def parse_lottery_result_page(target_url: str):
             if not any(ign in l.lower() for ign in ["live draw started", "keep refreshing", "results loading", "തത്സമയ നറുക്കെടുപ്പ് ആരംഭിച്ചു", "പേജ് റീഫ്രഷ്"])
         ]
 
-        # Universal multi-source Date Extraction
+        # Extract Draw Date from URL, H1 title, or body
         date_match = re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', target_url) or \
                      re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', raw_title) or \
                      re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', full_text)
         
         draw_date = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}" if date_match else "N/A"
 
-        # Native Malayalam Series Name Extraction
+        # Native Malayalam Series Name Hook
         malayalam_name_series = clean_lottery_title
         for i, line in enumerate(lines):
             if 'തത്സമയ നറുക്കെടുപ്പ്' in line and 'റിസൾട്ട്' in line:
@@ -559,7 +571,7 @@ def parse_lottery_result_page(target_url: str):
         prize_money_ml = {}
         current_prize_key = None
 
-        # Comprehensive footer phrases that signal the end of prize tables
+        # Stop boundaries that prevent footer dates (like 2026) from entering 9th prize
         footer_stop_phrases = [
             "prize winners are advised",
             "government gazette",
@@ -598,7 +610,7 @@ def parse_lottery_result_page(target_url: str):
             if current_prize_key:
                 if (line.startswith("(") and line.endswith(")")) or line in ["...", "---"]: continue
                 
-                # Exclude any line containing dates or years (like 19-08-2026 or 2026)
+                # Ignore any line with full dates or date headers
                 if re.search(r'\d{2}[./-]\d{2}[./-]\d{4}', line) or "date:" in line_l or "draw on" in line_l:
                     continue
 
@@ -611,10 +623,9 @@ def parse_lottery_result_page(target_url: str):
                     if cons_tickets:
                         prizes_data[current_prize_key].extend(cons_tickets)
                 else:
-                    # 4th through 9th Prizes: 4-digit numbers strictly ignoring year 2024-2030 if present in text
+                    # 4th through 9th Prizes: 4-digit numbers strictly ignoring year 2024-2030
                     four_digits = re.findall(r'\b\d{4}\b', line)
                     if four_digits:
-                        # Exclude stray year tokens if they match common year formats
                         valid_digits = [d for d in four_digits if not (d.startswith("202") and len(four_digits) == 1 and ("date" in line_l or "result" in line_l))]
                         if valid_digits:
                             prizes_data[current_prize_key].extend(valid_digits)
@@ -699,6 +710,10 @@ def parse_lottery_result_page(target_url: str):
         GLOBAL_STATE.log(f"Parsing Error: {e}")
         return None, None, {}, None, {}, {}, None
 
+                    
+        
+        
+        
 # ==========================================
 # 2. THUMBNAIL & YOUTUBE METADATA GENERATOR
 # ==========================================
@@ -1909,4 +1924,3 @@ with col2:
     st.subheader("📜 Live Process Console")
     log_area = st.empty()
     log_area.code("\n".join(GLOBAL_STATE.log_history) if GLOBAL_STATE.log_history else "System ready. Waiting for draw commands...", language="text")
-#Look in this script where to edit for 9th prize to not happen 2026 issue  only give the small piece of code to edit where and what in which line
