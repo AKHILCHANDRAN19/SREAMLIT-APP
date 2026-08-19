@@ -78,7 +78,6 @@ FINAL_OUTPUT_VIDEO = os.path.join(DOWNLOAD_DIR, "final_combined_lottery.mp4")
 
 # Background Audio Paths
 BANG_AUDIO_BGM = os.path.join(DOWNLOAD_DIR, "cinematic_bang.wav")
-SCROLL_AUDIO_BGM = os.path.join(DOWNLOAD_DIR, "calm_scroll_bgm.wav")
 
 FPS = 30
 WIDTH, HEIGHT = 1920, 1080
@@ -212,47 +211,7 @@ def generate_cinematic_bang(file_path):
         wf.setframerate(sample_rate)
         wf.writeframes(pcm.tobytes())
 
-def generate_calm_bgm(file_path, duration=180.0):
-    if os.path.exists(file_path): return
-    GLOBAL_STATE.log(f"Synthesizing Calm Scroll Ambient Pad to {file_path}...")
-    sample_rate = 44100
-    total_samples = int(sample_rate * duration)
-    
-    pcm = array.array('h')
-    freqs = [110.0, 164.81, 220.0, 246.94, 329.63] 
-    chunk_size = 44100
-    
-    for chunk_start in range(0, total_samples, chunk_size):
-        chunk_end = min(chunk_start + chunk_size, total_samples)
-        for i in range(chunk_start, chunk_end):
-            t = i / sample_rate
-            mix_l, mix_r = 0.0, 0.0
-            
-            for j, f in enumerate(freqs):
-                lfo = 0.5 + 0.5 * math.sin(2.0 * math.pi * (0.05 + j * 0.01) * t)
-                val_l = math.sin(2.0 * math.pi * f * t) * lfo
-                val_r = math.sin(2.0 * math.pi * (f * 1.002) * t) * lfo
-                mix_l += val_l * 0.12
-                mix_r += val_r * 0.12
-            
-            env = 1.0
-            if t < 2.0: env = t / 2.0
-            elif t > duration - 2.0: env = (duration - t) / 2.0
-            
-            out_l = math.tanh(mix_l * env)
-            out_r = math.tanh(mix_r * env)
-            
-            pcm.append(int(max(-32768, min(32767, out_l * 32767))))
-            pcm.append(int(max(-32768, min(32767, out_r * 32767))))
-            
-    with wave.open(file_path, "wb") as wf:
-        wf.setnchannels(2)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm.tobytes())
-
 generate_cinematic_bang(BANG_AUDIO_BGM)
-generate_calm_bgm(SCROLL_AUDIO_BGM)
 
 # --- HTTP ENGINE ---
 try:
@@ -1229,15 +1188,16 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         {'x': WIDTH//2 + rx, 'y': 310 + 50, 'phase': random.uniform(0, 6), 'speed': 0.17},
     ]
 
+    # Pre-render static base background
+    base_bg = bg_asset.copy()
+    b_draw = ImageDraw.Draw(base_bg)
+    b_draw.text((WIDTH//2, 90), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, 255), anchor="mm")
+    b_draw.text((WIDTH//2, 165), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
+    base_bg.alpha_composite(ribbon_asset)
+
     for frame in range(total_frames):
         time_sec = frame / FPS
-        canvas = bg_asset.copy()
-        draw = ImageDraw.Draw(canvas)
-
-        # Draw Header & Ribbon from Frame 0
-        draw.text((WIDTH//2, 90), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, 255), anchor="mm")
-        draw.text((WIDTH//2, 165), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
-        canvas.alpha_composite(ribbon_asset)
+        canvas = base_bg.copy()
 
         shake_dx, shake_dy = 0, 0
         if time_sec > (impact_time - 0.2):
@@ -1311,7 +1271,7 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         v_filters.append(f"fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}")
     v_filter_str = ",".join(v_filters) if v_filters else "null"
 
-    cmd = ["ffmpeg", "-y", "-i", raw_path]
+    cmd = ["ffmpeg", "-y", "-threads", "2", "-i", raw_path]
     if os.path.exists(audio_file) and os.path.exists(BANG_AUDIO_BGM):
         delay_ms = int(impact_time * 1000)
         cmd.extend([
@@ -1372,19 +1332,20 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         m_draw.line([(0, y), (WIDTH, y)], fill=int(255 * (y - fade_start) / (fade_end - fade_start)))
     m_draw.rectangle([0, fade_end, WIDTH, HEIGHT], fill=255)
 
+    # Pre-render static base background to eliminate per-frame font and ribbon overhead
+    base_bg = bg_asset.copy()
+    b_draw = ImageDraw.Draw(base_bg)
+    b_draw.text((WIDTH//2, 60), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, 255), anchor="mm")
+    b_draw.text((WIDTH//2, 135), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
+    base_bg.alpha_composite(ribbon_asset)
+
     raw_path = out_path.replace(".mp4", "_raw.mp4")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
 
     for frame in range(total_frames):
         time_sec = frame / FPS
-        canvas = bg_asset.copy()
-        draw = ImageDraw.Draw(canvas)
-
-        # Draw Header & Ribbon from Frame 0
-        draw.text((WIDTH//2, 60), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, 255), anchor="mm")
-        draw.text((WIDTH//2, 135), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
-        canvas.alpha_composite(ribbon_asset)
+        canvas = base_bg.copy()
 
         scroll_start = start_delay
         scroll_end = max(scroll_start + 0.5, calc_dur - end_delay)
@@ -1397,7 +1358,8 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
             crop_y = max_scroll
 
         cards_layer = giant_canvas.crop((0, crop_y, WIDTH, crop_y + HEIGHT))
-        cards_layer.putalpha(ImageChops.multiply(cards_layer.split()[3], mask))
+        # Fast native C alpha channel multiplication
+        cards_layer.putalpha(ImageChops.multiply(cards_layer.getchannel('A'), mask))
         canvas.alpha_composite(cards_layer)
 
         out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
@@ -1419,21 +1381,13 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         v_filters.append(f"fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}")
     v_filter_str = ",".join(v_filters) if v_filters else "null"
 
-    cmd = ["ffmpeg", "-y", "-i", raw_path]
-    if os.path.exists(audio_file) and os.path.exists(SCROLL_AUDIO_BGM):
+    # Direct Clean Voiceover Mixing without Background Music
+    cmd = ["ffmpeg", "-y", "-threads", "2", "-i", raw_path]
+    if os.path.exists(audio_file):
         cmd.extend([
-            "-i", audio_file, "-i", SCROLL_AUDIO_BGM, "-filter_complex", 
+            "-i", audio_file, "-filter_complex", 
             f"[0:v]{v_filter_str}[vout];"
-            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad[vocal];"
-            f"[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.15[bgm];"
-            f"[vocal][bgm]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{calc_dur}[aout]", 
-            "-map", "[vout]", "-map", "[aout]"
-        ])
-    elif os.path.exists(audio_file):
-        cmd.extend([
-            "-i", audio_file, "-filter_complex",
-            f"[0:v]{v_filter_str}[vout];"
-            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,apad,atrim=0:{calc_dur}[aout]",
+            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad,atrim=0:{calc_dur}[aout]", 
             "-map", "[vout]", "-map", "[aout]"
         ])
     else:
@@ -1457,24 +1411,23 @@ def compress_and_combine(video_files, final_output):
         shutil.copy(video_files[0], final_output)
         return
 
-    # Low-memory, timestamp-normalized sequential concatenation
-    cmd = ["ffmpeg", "-y", "-threads", "2"]
-    filter_str = ""
-    for i, vid in enumerate(video_files):
-        cmd.extend(["-i", vid])
-        filter_str += f"[{i}:v:0]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}];[{i}:a:0]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a{i}];"
-        
-    concat_inputs = "".join([f"[v{i}][a{i}]" for i in range(len(video_files))])
-    filter_complex = f"{filter_str}{concat_inputs}concat=n={len(video_files)}:v=1:a=1[v][a]"
-    
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
+    # Ultra-Low RAM (40MB) Sequential Concat Demuxer with perfect Audio/Video synchronization
+    list_file = os.path.join(DOWNLOAD_DIR, "ffmpeg_concat_list.txt")
+    with open(list_file, "w", encoding="utf-8") as f:
+        for vid in video_files:
+            f.write(f"file '{os.path.abspath(vid)}'\n")
+
+    cmd = [
+        "ffmpeg", "-y", "-threads", "2",
+        "-f", "concat", "-safe", "0", "-i", list_file,
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         final_output
-    ])
+    ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    if os.path.exists(list_file):
+        os.remove(list_file)
 
     for vid in video_files:
         if os.path.exists(vid):
