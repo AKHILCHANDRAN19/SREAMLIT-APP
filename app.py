@@ -1411,17 +1411,19 @@ def compress_and_combine(video_files, final_output):
         shutil.copy(video_files[0], final_output)
         return
 
-    # Ultra-Low RAM (40MB) Sequential Concat Demuxer with perfect Audio/Video synchronization
+    # Write file paths for sequential demuxer
     list_file = os.path.join(DOWNLOAD_DIR, "ffmpeg_concat_list.txt")
     with open(list_file, "w", encoding="utf-8") as f:
         for vid in video_files:
             f.write(f"file '{os.path.abspath(vid)}'\n")
 
+    # Ultra-Low RAM (40MB) Sequential Concat with Timestamp & Audio Re-sync
     cmd = [
         "ffmpeg", "-y", "-threads", "2",
         "-f", "concat", "-safe", "0", "-i", list_file,
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        "-avoid_negative_ts", "make_zero", "-fflags", "+genpts",
         final_output
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
