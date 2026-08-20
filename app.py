@@ -1411,25 +1411,29 @@ def compress_and_combine(video_files, final_output):
         shutil.copy(video_files[0], final_output)
         return
 
-    # Write file paths for sequential demuxer
-    list_file = os.path.join(DOWNLOAD_DIR, "ffmpeg_concat_list.txt")
-    with open(list_file, "w", encoding="utf-8") as f:
-        for vid in video_files:
-            f.write(f"file '{os.path.abspath(vid)}'\n")
-
-    # Ultra-Low RAM (40MB) Sequential Concat with Timestamp & Audio Re-sync
-    cmd = [
-        "ffmpeg", "-y", "-threads", "2",
-        "-f", "concat", "-safe", "0", "-i", list_file,
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
+    # Normalized sequential concatenation with Reset Timestamps (Fixes freeze & audio loss)
+    cmd = ["ffmpeg", "-y", "-threads", "2"]
+    filter_str = ""
+    for i, vid in enumerate(video_files):
+        cmd.extend(["-i", vid])
+        # setpts and asetpts reset the clock to 0.0 for every segment, preventing freezes and audio dropouts
+        filter_str += (
+            f"[{i}:v:0]setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,"
+            f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}];"
+            f"[{i}:a:0]asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a{i}];"
+        )
+        
+    concat_inputs = "".join([f"[v{i}][a{i}]" for i in range(len(video_files))])
+    filter_complex = f"{filter_str}{concat_inputs}concat=n={len(video_files)}:v=1:a=1[v][a]"
+    
+    cmd.extend([
+        "-filter_complex", filter_complex,
+        "-map", "[v]", "-map", "[a]",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
-        "-avoid_negative_ts", "make_zero", "-fflags", "+genpts",
         final_output
-    ]
+    ])
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    if os.path.exists(list_file):
-        os.remove(list_file)
 
     for vid in video_files:
         if os.path.exists(vid):
