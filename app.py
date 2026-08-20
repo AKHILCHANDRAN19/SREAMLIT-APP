@@ -525,7 +525,7 @@ def parse_lottery_result_page(target_url: str):
             ml_m = re.search(pat, full_raw_text)
             if ml_m:
                 cand = ml_m.group(0 if '(' not in pat else 1).strip()
-                cand = re.sub(r'(?i)\b(?:Live|@\s*\d+:\d+[a-z]*|Winners|Numbers|Date of Draw|ഫലം)\b', '', cand)
+                cand = re.split(r'(?i)\b(?:kerala|lottery|live|result)\b|@|\d{1,2}:\d{2}', cand)[0]
                 cand = re.sub(r'[:—\-~]', ' ', cand)
                 cand = re.sub(r'\s+', ' ', cand).strip()
                 if len(cand) >= 3 and "ആരംഭിച്ചു" not in cand and "തുടരുക" not in cand:
