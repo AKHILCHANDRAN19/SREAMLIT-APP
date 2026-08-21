@@ -1354,7 +1354,7 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
 
     y_expr = f"if(lte(t\\,{scroll_start})\\,0\\,if(gte(t\\,{scroll_end})\\,{max_scroll}\\,{max_scroll}*(t-{scroll_start})/{scroll_dur}))"
 
-    v_filter = f"[1:v]crop=w=1920:h={VIEW_H}:x=0:y='{y_expr}'[scrolled];[0:v][scrolled]overlay=x=0:y={VIEW_Y}:eval=frame[v_combined]"
+    v_filter = f"[1:v]crop=w=1920:h={VIEW_H}:x=0:y='{y_expr}'[scrolled];[0:v][scrolled]overlay=x=0:y={VIEW_Y}[v_combined]"
 
     if ENABLE_TRANSITIONS and TRANSITION_FADE_DURATION > 0:
         fade_out_st = max(0.0, calc_dur - TRANSITION_FADE_DURATION)
