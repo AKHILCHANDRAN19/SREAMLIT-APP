@@ -1368,6 +1368,10 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
             try: progress_cb(frame + 1, total_frames)
             except Exception: pass
 
+        # Force clear PIL & NumPy image cache every 300 frames to stay under 1GB RAM
+        if frame % 300 == 0:
+            gc.collect()
+
     out.release()
     if progress_cb:
         try: progress_cb(total_frames, total_frames)
