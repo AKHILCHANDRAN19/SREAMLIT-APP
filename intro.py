@@ -76,9 +76,11 @@ def ease_drop_bounce(t):
 def apply_opacity(image, opacity):
     if opacity >= 1.0: return image
     if opacity <= 0.0: return Image.new("RGBA", image.size, (0, 0, 0, 0))
-    arr = np.array(image).astype(np.float32)
-    arr[:, :, 3] = arr[:, :, 3] * opacity
-    return Image.fromarray(arr.astype(np.uint8), "RGBA")
+    out = image.copy()
+    alpha = out.getchannel('A')
+    alpha = alpha.point(lambda p: int(p * opacity))
+    out.putalpha(alpha)
+    return out
 
 def generate_vertical_gradient(w, h, stops):
     gradient = np.zeros((h, w, 4), dtype=np.uint8)
