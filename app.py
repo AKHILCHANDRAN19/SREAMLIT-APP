@@ -1414,30 +1414,34 @@ def compress_and_combine(video_files, final_output):
         shutil.copy(video_files[0], final_output)
         return
 
-    # Create concat list on disk to bypass memory-heavy filtergraph
+    # 1. Write the sequential file list for FFmpeg concat demuxer
     list_file_path = os.path.join(DOWNLOAD_DIR, "concat_list.txt")
     with open(list_file_path, "w") as f:
         for vid in video_files:
-            f.write(f"file '{os.path.abspath(vid)}'\n")
+            clean_path = os.path.abspath(vid).replace("'", "'\\''")
+            f.write(f"file '{clean_path}'\n")
 
-    # Direct stream copy: 0 re-encoding, uses < 15MB RAM
+    # 2. Sequential concat re-encode (Reads 1 file at a time -> <60MB RAM; rebuilds timestamps)
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-y", "-threads", "2",
         "-f", "concat",
         "-safe", "0",
         "-i", list_file_path,
-        "-c", "copy",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        "-avoid_negative_ts", "make_zero",
+        "-fflags", "+genpts",
         final_output
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    # 3. Cleanup temporary files
     if os.path.exists(list_file_path):
         os.remove(list_file_path)
 
     for vid in video_files:
         if os.path.exists(vid):
             os.remove(vid)
-
 
 async def execute_result_pipeline(app, chat_id, target_url):
     msg = await app.send_message(chat_id, "🔎 **Fetching lottery draw data...**")
