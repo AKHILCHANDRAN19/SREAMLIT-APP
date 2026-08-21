@@ -1161,10 +1161,6 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     ribbon_asset = pre_render_ribbon_bang(prize_heading)
     glass_asset = pre_render_glass_card(district)
     
-    raw_path = out_path.replace(".mp4", "_raw.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
-    
     confetti = []
     confetti_triggered = False
     
@@ -1188,12 +1184,52 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         {'x': WIDTH//2 + rx, 'y': 310 + 50, 'phase': random.uniform(0, 6), 'speed': 0.17},
     ]
 
-    # Pre-render static base background
     base_bg = bg_asset.copy()
     b_draw = ImageDraw.Draw(base_bg)
     b_draw.text((WIDTH//2, 90), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, 255), anchor="mm")
     b_draw.text((WIDTH//2, 165), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
     base_bg.alpha_composite(ribbon_asset)
+
+    v_filters = []
+    if ENABLE_TRANSITIONS and TRANSITION_FADE_DURATION > 0:
+        fade_out_st = max(0.0, calc_dur - TRANSITION_FADE_DURATION)
+        v_filters.append(f"fade=t=in:st=0:d={TRANSITION_FADE_DURATION}")
+        v_filters.append(f"fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}")
+    v_filter_str = ",".join(v_filters) if v_filters else "null"
+
+    # Direct stdin pipe to FFmpeg (0 MB disk space used)
+    cmd = [
+        "ffmpeg", "-y", "-threads", "2",
+        "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{WIDTH}x{HEIGHT}", "-pix_fmt", "bgr24", "-r", str(FPS),
+        "-i", "-"
+    ]
+    if os.path.exists(audio_file) and os.path.exists(BANG_AUDIO_BGM):
+        delay_ms = int(impact_time * 1000)
+        cmd.extend([
+            "-i", audio_file, "-i", BANG_AUDIO_BGM, "-filter_complex", 
+            f"[0:v]{v_filter_str}[vout];"
+            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad[a1];"
+            f"[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.25,adelay={delay_ms}|{delay_ms}[a2];"
+            f"[a1][a2]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{calc_dur}[aout]", 
+            "-map", "[vout]", "-map", "[aout]"
+        ])
+    elif os.path.exists(audio_file):
+        cmd.extend([
+            "-i", audio_file, "-filter_complex",
+            f"[0:v]{v_filter_str}[vout];"
+            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,apad,atrim=0:{calc_dur}[aout]",
+            "-map", "[vout]", "-map", "[aout]"
+        ])
+    else:
+        cmd.extend([
+            "-filter_complex", f"[0:v]{v_filter_str}[vout]",
+            "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:d={calc_dur}",
+            "-map", "[vout]", "-map", "1:a"
+        ])
+        
+    cmd.extend(["-vcodec", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", out_path])
+    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
     for frame in range(total_frames):
         time_sec = frame / FPS
@@ -1252,53 +1288,19 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
 
         final_frame = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,255))
         final_frame.paste(canvas, (int(shake_dx), int(shake_dy)))
-        out.write(cv2.cvtColor(np.array(final_frame), cv2.COLOR_RGBA2BGR))
+        bgr_frame = cv2.cvtColor(np.array(final_frame), cv2.COLOR_RGBA2BGR)
+        process.stdin.write(bgr_frame.tobytes())
 
         if progress_cb and frame % 25 == 0:
             try: progress_cb(frame + 1, total_frames)
             except Exception: pass
 
-    out.release()
+    process.stdin.close()
+    process.wait()
     if progress_cb:
         try: progress_cb(total_frames, total_frames)
         except Exception: pass
     gc.collect()
-
-    v_filters = []
-    if ENABLE_TRANSITIONS and TRANSITION_FADE_DURATION > 0:
-        fade_out_st = max(0.0, calc_dur - TRANSITION_FADE_DURATION)
-        v_filters.append(f"fade=t=in:st=0:d={TRANSITION_FADE_DURATION}")
-        v_filters.append(f"fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}")
-    v_filter_str = ",".join(v_filters) if v_filters else "null"
-
-    cmd = ["ffmpeg", "-y", "-threads", "2", "-i", raw_path]
-    if os.path.exists(audio_file) and os.path.exists(BANG_AUDIO_BGM):
-        delay_ms = int(impact_time * 1000)
-        cmd.extend([
-            "-i", audio_file, "-i", BANG_AUDIO_BGM, "-filter_complex", 
-            f"[0:v]{v_filter_str}[vout];"
-            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad[a1];"
-            f"[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=0.25,adelay={delay_ms}|{delay_ms}[a2];"
-            f"[a1][a2]amix=inputs=2:duration=first:dropout_transition=0,atrim=0:{calc_dur}[aout]", 
-            "-map", "[vout]", "-map", "[aout]"
-        ])
-    elif os.path.exists(audio_file):
-        cmd.extend([
-            "-i", audio_file, "-filter_complex",
-            f"[0:v]{v_filter_str}[vout];"
-            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,apad,atrim=0:{calc_dur}[aout]",
-            "-map", "[vout]", "-map", "[aout]"
-        ])
-    else:
-        cmd.extend([
-            "-filter_complex", f"[0:v]{v_filter_str}[vout]",
-            "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:d={calc_dur}",
-            "-map", "[vout]", "-map", "1:a"
-        ])
-        
-    cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", out_path])
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if os.path.exists(raw_path): os.remove(raw_path)
 
 def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_path, base_dur, is_4col, end_delay, start_delay_override=None, progress_cb=None):
     audio_file = out_path.replace(".mp4", ".wav")
