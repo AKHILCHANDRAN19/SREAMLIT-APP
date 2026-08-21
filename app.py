@@ -1306,6 +1306,7 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     
     start_delay = start_delay_override if (start_delay_override and start_delay_override > 0) else (audio_dur if audio_dur > 0 else 2.0)
     calc_dur = start_delay + base_dur
+    total_frames = int(30 * calc_dur)
     
     cols = 4 if is_4col else 2
     bg_asset = pre_render_background(theme)
@@ -1322,7 +1323,7 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     base_bg.save(bg_path, "PNG")
     del base_bg, bg_asset, ribbon_asset
 
-    # 2. Build Tall Cards Image (Holds all 158 numbers on transparent canvas)
+    # 2. Build Tall Cards Canvas
     rows = math.ceil(len(numbers_list) / cols)
     row_height = 150 if is_4col else 200
     total_canvas_h = max(HEIGHT, (rows * row_height) + 400)
@@ -1341,47 +1342,42 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     del giant_canvas
     gc.collect()
 
-    # 3. Native FFmpeg C-Scroll Parameters (<40MB RAM, renders 110s in ~8s)
+    # 3. Viewport & Scroll Math
     VIEW_Y = 360
     VIEW_H = HEIGHT - VIEW_Y
     max_scroll = max(0, total_canvas_h - VIEW_H)
     scroll_start = start_delay
     scroll_end = max(scroll_start + 0.5, calc_dur - end_delay)
-    scroll_dur = scroll_end - scroll_start
+    scroll_dur = max(0.1, scroll_end - scroll_start)
 
-    # Mathematical scroll expression inside FFmpeg
     y_expr = f"if(lte(t\\,{scroll_start})\\,0\\,if(gte(t\\,{scroll_end})\\,{max_scroll}\\,{max_scroll}*(t-{scroll_start})/{scroll_dur}))"
 
-    v_filters = [
-        f"[1:v]crop=w=1920:h={VIEW_H}:x=0:y='{y_expr}'[scrolled]",
-        f"[0:v][scrolled]overlay=x=0:y={VIEW_Y}[v_combined]"
-    ]
+    v_filter = f"[1:v]crop=w=1920:h={VIEW_H}:x=0:y='{y_expr}'[scrolled];[0:v][scrolled]overlay=x=0:y={VIEW_Y}:eval=frame[v_combined]"
 
     if ENABLE_TRANSITIONS and TRANSITION_FADE_DURATION > 0:
         fade_out_st = max(0.0, calc_dur - TRANSITION_FADE_DURATION)
-        v_filters.append(f"[v_combined]fade=t=in:st=0:d={TRANSITION_FADE_DURATION},fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}[vout]")
+        v_filter += f";[v_combined]fade=t=in:st=0:d={TRANSITION_FADE_DURATION},fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}[vout]"
         final_v_label = "[vout]"
     else:
         final_v_label = "[v_combined]"
 
-    filter_complex = ";".join(v_filters)
-
+    # Notice: Explicit -framerate 30 added before -loop 1 to prevent timestamp mismatch freeze
     cmd = [
         "ffmpeg", "-y", "-threads", "2",
-        "-loop", "1", "-t", str(calc_dur), "-i", bg_path,
-        "-loop", "1", "-t", str(calc_dur), "-i", cards_path
+        "-framerate", "30", "-loop", "1", "-t", str(calc_dur), "-i", bg_path,
+        "-framerate", "30", "-loop", "1", "-t", str(calc_dur), "-i", cards_path
     ]
 
     if os.path.exists(audio_file):
         cmd.extend([
             "-i", audio_file,
-            "-filter_complex", 
-            f"{filter_complex};[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad,atrim=0:{calc_dur}[aout]",
+            "-filter_complex",
+            f"{v_filter};[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad,atrim=0:{calc_dur}[aout]",
             "-map", final_v_label, "-map", "[aout]"
         ])
     else:
         cmd.extend([
-            "-filter_complex", filter_complex,
+            "-filter_complex", v_filter,
             "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:d={calc_dur}",
             "-map", final_v_label, "-map", "2:a"
         ])
@@ -1389,12 +1385,25 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     cmd.extend([
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        "-progress", "pipe:1",
         out_path
     ])
 
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # 4. Run Process with Live Progress Output
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    
+    for line in process.stdout:
+        if "frame=" in line:
+            try:
+                curr_frame = int(line.split("frame=")[-1].strip().split()[0])
+                if progress_cb:
+                    progress_cb(curr_frame, total_frames)
+            except Exception:
+                pass
+                
+    process.wait()
 
-    # 4. Clean up temporary PNGs
+    # 5. Clean up temporary PNGs
     for p in [bg_path, cards_path]:
         if os.path.exists(p):
             os.remove(p)
