@@ -1319,8 +1319,8 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     b_draw.text((WIDTH//2, 135), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
     base_bg.alpha_composite(ribbon_asset)
     
-    bg_path = out_path.replace(".mp4", "_bg.png")
-    base_bg.save(bg_path, "PNG")
+    bg_path = out_path.replace(".mp4", "_bg.bmp")
+    base_bg.save(bg_path, "BMP")
     del base_bg, bg_asset, ribbon_asset
 
     # 2. Build Tall Cards Canvas
@@ -1337,8 +1337,8 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         cw, ch = card.size
         giant_canvas.paste(card, (int(c_x - cw//2), int(c_y)), card)
 
-    cards_path = out_path.replace(".mp4", "_cards.png")
-    giant_canvas.save(cards_path, "PNG")
+    cards_path = out_path.replace(".mp4", "_cards.bmp")
+    giant_canvas.save(cards_path, "BMP")
     del giant_canvas
     gc.collect()
 
