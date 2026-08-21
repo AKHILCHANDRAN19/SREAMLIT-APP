@@ -98,16 +98,21 @@ def render_3d_text(
 
     # Extrusion Slices
     extrusion = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    slice_img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(slice_img)
+
     for step in range(depth, 0, -1):
         t = step / float(depth)
         r = int(depth_top[0] * (1.0 - t) + depth_bot[0] * t)
         g = int(depth_top[1] * (1.0 - t) + depth_bot[1] * t)
         b = int(depth_top[2] * (1.0 - t) + depth_bot[2] * t)
 
-        slice_img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        sd = ImageDraw.Draw(slice_img)
+        # Reuse single pre-allocated slice buffer
+        sd.rectangle([0, 0, W, H], fill=(0, 0, 0, 0))
         sd.bitmap((0, step), mask, fill=(r, g, b, 255))
         extrusion = Image.alpha_composite(extrusion, slice_img)
+
+    del slice_img
 
     # Front Gradient
     bbox = mask.getbbox()
