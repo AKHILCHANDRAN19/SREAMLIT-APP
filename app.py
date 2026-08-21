@@ -1736,6 +1736,7 @@ async def run_pyrofork_bot():
             await send_yt_metadata_package(client, callback_query.message.chat.id, title_1, title_2, yt_desc, yt_tags)
 
             if action == "ru" and len(video_files) > 1:
+                gc.collect()  # Flush previous render buffers from RAM before stitching
                 GLOBAL_STATE.set_status("Final Stitching", 0.95, f"Combining {len(video_files)} video segments...")
                 status_msg = await client.send_message(callback_query.message.chat.id, "🗜️ **Combining selected videos...**")
                 await asyncio.to_thread(compress_and_combine, video_files, FINAL_OUTPUT_VIDEO)
