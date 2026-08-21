@@ -407,7 +407,8 @@ def generate_video(output_video_path):
         'ffmpeg', '-y', '-f', 'rawvideo', '-vcodec', 'rawvideo',
         '-s', f'{WIDTH}x{HEIGHT}', '-pix_fmt', 'bgr24', '-r', str(FPS),
         '-i', '-', '-i', audio_path, '-c:v', 'libx264', '-preset', 'ultrafast',
-        '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', output_video_path
+        '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '2',
+        '-shortest', output_video_path
     ]
     process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
