@@ -1683,6 +1683,9 @@ async def run_pyrofork_bot():
                     await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
                     await client.send_video(chat_id=chat_id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
                     await broadcast_to_channel(client, video_path=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
+                    # Delete intermediate WAV file immediately to free RAM disk
+                    if os.path.exists(audio_path):
+                        os.remove(audio_path)
             except Exception as e:
                 GLOBAL_STATE.log(f"Video render error for {p_name}: {e}")
             finally:
