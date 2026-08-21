@@ -1306,105 +1306,100 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     
     start_delay = start_delay_override if (start_delay_override and start_delay_override > 0) else (audio_dur if audio_dur > 0 else 2.0)
     calc_dur = start_delay + base_dur
-    total_frames = int(FPS * calc_dur)
     
     cols = 4 if is_4col else 2
     bg_asset = pre_render_background(theme)
     ribbon_asset = pre_render_ribbon_scroll(prize_heading)
 
-    rows = math.ceil(len(numbers_list) / cols)
-    max_scroll = max(0, rows * (150 if is_4col else 200) - 400)
-    total_canvas_h = max(HEIGHT, 440 + (rows * (150 if is_4col else 200)) + 600)
-    
-    giant_canvas = Image.new("RGBA", (WIDTH, total_canvas_h), (0,0,0,0))
-    for i, num in enumerate(numbers_list):
-        col, row = i % cols, i // cols
-        c_x = [240, 720, 1200, 1680][col] if is_4col else (540 if col == 0 else 1380)
-        c_y = 440 + (row * (150 if is_4col else 200))
-        card = pre_render_grid_card(num, is_small=is_4col)
-        cw, ch = card.size
-        giant_canvas.paste(card, (int(c_x - cw//2), int(c_y - ch//2)), card)
-
-    mask = Image.new("L", (WIDTH, HEIGHT), 0)
-    m_draw = ImageDraw.Draw(mask)
-    fade_start, fade_end = 360, 420
-    for y in range(fade_start, fade_end):
-        m_draw.line([(0, y), (WIDTH, y)], fill=int(255 * (y - fade_start) / (fade_end - fade_start)))
-    m_draw.rectangle([0, fade_end, WIDTH, HEIGHT], fill=255)
-
-    # Pre-render static base background to eliminate per-frame font and ribbon overhead
+    # 1. Build Base Background (1920x1080)
     base_bg = bg_asset.copy()
     b_draw = ImageDraw.Draw(base_bg)
     b_draw.text((WIDTH//2, 60), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, 255), anchor="mm")
     b_draw.text((WIDTH//2, 135), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
     base_bg.alpha_composite(ribbon_asset)
+    
+    bg_path = out_path.replace(".mp4", "_bg.png")
+    base_bg.save(bg_path, "PNG")
+    del base_bg, bg_asset, ribbon_asset
 
-    raw_path = out_path.replace(".mp4", "_raw.mp4")
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(raw_path, fourcc, FPS, (WIDTH, HEIGHT))
+    # 2. Build Tall Cards Image (Holds all 158 numbers on transparent canvas)
+    rows = math.ceil(len(numbers_list) / cols)
+    row_height = 150 if is_4col else 200
+    total_canvas_h = max(HEIGHT, (rows * row_height) + 400)
+    
+    giant_canvas = Image.new("RGBA", (WIDTH, total_canvas_h), (0, 0, 0, 0))
+    for i, num in enumerate(numbers_list):
+        col, row = i % cols, i // cols
+        c_x = [240, 720, 1200, 1680][col] if is_4col else (540 if col == 0 else 1380)
+        c_y = 50 + (row * row_height)
+        card = pre_render_grid_card(num, is_small=is_4col)
+        cw, ch = card.size
+        giant_canvas.paste(card, (int(c_x - cw//2), int(c_y)), card)
 
-    for frame in range(total_frames):
-        time_sec = frame / FPS
-        canvas = base_bg.copy()
-
-        scroll_start = start_delay
-        scroll_end = max(scroll_start + 0.5, calc_dur - end_delay)
-        
-        crop_y = 0
-        if scroll_start < time_sec < scroll_end:
-            progress = (time_sec - scroll_start) / (scroll_end - scroll_start)
-            crop_y = int(max_scroll * ease_in_out_cubic(progress))
-        elif time_sec >= scroll_end:
-            crop_y = max_scroll
-
-        cards_layer = giant_canvas.crop((0, crop_y, WIDTH, crop_y + HEIGHT))
-        # Fast native C alpha channel multiplication
-        cards_layer.putalpha(ImageChops.multiply(cards_layer.getchannel('A'), mask))
-        canvas.alpha_composite(cards_layer)
-
-        out.write(cv2.cvtColor(np.array(canvas), cv2.COLOR_RGBA2BGR))
-
-        if progress_cb and frame % 30 == 0:
-            try: progress_cb(frame + 1, total_frames)
-            except Exception: pass
-
-        # Force clear PIL & NumPy image cache every 300 frames to stay under 1GB RAM
-        if frame % 300 == 0:
-            gc.collect()
-
-    out.release()
-    if progress_cb:
-        try: progress_cb(total_frames, total_frames)
-        except Exception: pass
+    cards_path = out_path.replace(".mp4", "_cards.png")
+    giant_canvas.save(cards_path, "PNG")
+    del giant_canvas
     gc.collect()
 
-    v_filters = []
+    # 3. Native FFmpeg C-Scroll Parameters (<40MB RAM, renders 110s in ~8s)
+    VIEW_Y = 360
+    VIEW_H = HEIGHT - VIEW_Y
+    max_scroll = max(0, total_canvas_h - VIEW_H)
+    scroll_start = start_delay
+    scroll_end = max(scroll_start + 0.5, calc_dur - end_delay)
+    scroll_dur = scroll_end - scroll_start
+
+    # Mathematical scroll expression inside FFmpeg
+    y_expr = f"if(lte(t\\,{scroll_start})\\,0\\,if(gte(t\\,{scroll_end})\\,{max_scroll}\\,{max_scroll}*(t-{scroll_start})/{scroll_dur}))"
+
+    v_filters = [
+        f"[1:v]crop=w=1920:h={VIEW_H}:x=0:y='{y_expr}'[scrolled]",
+        f"[0:v][scrolled]overlay=x=0:y={VIEW_Y}[v_combined]"
+    ]
+
     if ENABLE_TRANSITIONS and TRANSITION_FADE_DURATION > 0:
         fade_out_st = max(0.0, calc_dur - TRANSITION_FADE_DURATION)
-        v_filters.append(f"fade=t=in:st=0:d={TRANSITION_FADE_DURATION}")
-        v_filters.append(f"fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}")
-    v_filter_str = ",".join(v_filters) if v_filters else "null"
+        v_filters.append(f"[v_combined]fade=t=in:st=0:d={TRANSITION_FADE_DURATION},fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}[vout]")
+        final_v_label = "[vout]"
+    else:
+        final_v_label = "[v_combined]"
 
-    # Direct Clean Voiceover Mixing without Background Music
-    cmd = ["ffmpeg", "-y", "-threads", "2", "-i", raw_path]
+    filter_complex = ";".join(v_filters)
+
+    cmd = [
+        "ffmpeg", "-y", "-threads", "2",
+        "-loop", "1", "-t", str(calc_dur), "-i", bg_path,
+        "-loop", "1", "-t", str(calc_dur), "-i", cards_path
+    ]
+
     if os.path.exists(audio_file):
         cmd.extend([
-            "-i", audio_file, "-filter_complex", 
-            f"[0:v]{v_filter_str}[vout];"
-            f"[1:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad,atrim=0:{calc_dur}[aout]", 
-            "-map", "[vout]", "-map", "[aout]"
+            "-i", audio_file,
+            "-filter_complex", 
+            f"{filter_complex};[2:a]aformat=channel_layouts=stereo:sample_rates=44100,volume=1.0,apad,atrim=0:{calc_dur}[aout]",
+            "-map", final_v_label, "-map", "[aout]"
         ])
     else:
         cmd.extend([
-            "-filter_complex", f"[0:v]{v_filter_str}[vout]",
+            "-filter_complex", filter_complex,
             "-f", "lavfi", "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:d={calc_dur}",
-            "-map", "[vout]", "-map", "1:a"
+            "-map", final_v_label, "-map", "2:a"
         ])
-        
-    cmd.extend(["-vcodec", "libx264", "-preset", "fast", "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", out_path])
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if os.path.exists(raw_path): os.remove(raw_path)
 
+    cmd.extend([
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        out_path
+    ])
+
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # 4. Clean up temporary PNGs
+    for p in [bg_path, cards_path]:
+        if os.path.exists(p):
+            os.remove(p)
+    gc.collect()
+    
 # ==========================================
 # 5. BOT PIPELINE & FFMPEG STITCHING
 # ==========================================
