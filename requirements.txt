@@ -4,7 +4,7 @@ beautifulsoup4
 curl-cffi
 requests
 tgcrypto
-opencv-python
+opencv-python-headless
 pillow
 numpy
 websockets
