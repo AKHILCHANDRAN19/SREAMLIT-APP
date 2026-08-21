@@ -1404,40 +1404,36 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
 # ==========================================
 # 5. BOT PIPELINE & FFMPEG STITCHING
 # ==========================================
-
 def compress_and_combine(video_files, final_output):
     if not video_files: return
     if len(video_files) == 1:
         shutil.copy(video_files[0], final_output)
         return
 
-    # Normalized sequential concatenation with Reset Timestamps (Fixes freeze & audio loss)
-    cmd = ["ffmpeg", "-y", "-threads", "2"]
-    filter_str = ""
-    for i, vid in enumerate(video_files):
-        cmd.extend(["-i", vid])
-        # setpts and asetpts reset the clock to 0.0 for every segment, preventing freezes and audio dropouts
-        filter_str += (
-            f"[{i}:v:0]setpts=PTS-STARTPTS,scale=1920:1080:force_original_aspect_ratio=decrease,"
-            f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}];"
-            f"[{i}:a:0]asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a{i}];"
-        )
-        
-    concat_inputs = "".join([f"[v{i}][a{i}]" for i in range(len(video_files))])
-    filter_complex = f"{filter_str}{concat_inputs}concat=n={len(video_files)}:v=1:a=1[v][a]"
-    
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+    # Create concat list on disk to bypass memory-heavy filtergraph
+    list_file_path = os.path.join(DOWNLOAD_DIR, "concat_list.txt")
+    with open(list_file_path, "w") as f:
+        for vid in video_files:
+            f.write(f"file '{os.path.abspath(vid)}'\n")
+
+    # Direct stream copy: 0 re-encoding, uses < 15MB RAM
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", list_file_path,
+        "-c", "copy",
         final_output
-    ])
+    ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    if os.path.exists(list_file_path):
+        os.remove(list_file_path)
 
     for vid in video_files:
         if os.path.exists(vid):
             os.remove(vid)
+
 
 async def execute_result_pipeline(app, chat_id, target_url):
     msg = await app.send_message(chat_id, "🔎 **Fetching lottery draw data...**")
