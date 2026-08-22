@@ -79,8 +79,8 @@ FINAL_OUTPUT_VIDEO = os.path.join(DOWNLOAD_DIR, "final_combined_lottery.mp4")
 # Background Audio Paths
 BANG_AUDIO_BGM = os.path.join(DOWNLOAD_DIR, "cinematic_bang.wav")
 
-FPS = 30
-WIDTH, HEIGHT = 1920, 1080
+FPS = 25
+WIDTH, HEIGHT = 1280, 720
 
 # ==========================================
 # PERSISTENT TELEMETRY & CACHE SINGLETON
@@ -439,18 +439,15 @@ def fetch_last_10_draws():
         for entry in entries:
             raw_title = entry.get("title", {}).get("$t", "")
             
-            # Find the canonical web URL
             post_url = ""
             for link in entry.get("link", []):
                 if link.get("rel") == "alternate":
                     post_url = link.get("href", "")
                     break
 
-            # 1. Skip generic static landing post
             if "today-kerala-lottery-result-live" in post_url:
                 continue
 
-            # 2. Extract Date (DD-MM-YYYY)
             date_match = re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', raw_title) or \
                          re.search(r'(\d{2})[./-](\d{2})[./-](\d{4})', post_url)
             if not date_match:
@@ -458,7 +455,6 @@ def fetch_last_10_draws():
 
             d_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
 
-            # 3. Clean Title
             clean_title = re.sub(r'(?i)\b(?:Kerala Lotteries Results?:?|Kerala Lottery Results?:?|Lottery Result|Official Result|Results? Today|Live)\b', '', raw_title)
             clean_title = re.sub(r'\d{2}[./-]\d{2}[./-]\d{4}', '', clean_title)
             clean_title = re.sub(r'[:—\-~]', ' ', clean_title)
@@ -509,7 +505,7 @@ def parse_lottery_result_page(target_url: str):
                      re.search(r'(\d{2})\s*[./-]\s*(\d{2})\s*[./-]\s*(\d{4})', full_raw_text)
         draw_date = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}" if date_match else "N/A"
 
-        # Malayalam Name Extraction (Ignores "Live Draw Started" box)
+        # Malayalam Name Extraction
         malayalam_name_series = clean_lottery_title
         ml_patterns = [
             r'ഇന്നത്തെ\s*കേരളാ\s*ലോട്ടറി\s*റിസൾട്ട്\s*([^\n<]+)',
@@ -535,7 +531,6 @@ def parse_lottery_result_page(target_url: str):
         series_match = re.search(r'Today Lottery Series:\s*([A-Z0-9,\s]+)', full_raw_text)
         series_str = series_match.group(1).strip() if series_match else "N/A"
 
-        # Prepare line-by-line parsing
         for tag in post_body.find_all(['br', 'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'li', 'table']):
             tag.insert_after('\n')
         lines = [re.sub(r'\s+', ' ', line).strip() for line in post_body.get_text().split('\n') if line.strip()]
@@ -547,7 +542,6 @@ def parse_lottery_result_page(target_url: str):
         current_prize_key = None
 
         for line in lines:
-            # Stop before repeated numbers / disclaimers
             if any(sp in line.lower() for sp in ["prize winners are advised to verify", "government gazette", "tomorrow draw details", "repeated draw numbers"]):
                 break
             
@@ -580,14 +574,12 @@ def parse_lottery_result_page(target_url: str):
                         prizes_data[current_prize_key].extend(cons_tickets)
                 else:
                     four_digits = re.findall(r'\b\d{4}\b', line)
-                    # Filter out year numbers (2024-2030) so years never become winning numbers
                     filtered = [d for d in four_digits if d not in YEAR_BLACKLIST]
                     if filtered:
                         prizes_data[current_prize_key].extend(filtered)
 
         prizes_data = {k: v for k, v in prizes_data.items() if v}
 
-        # Build output message
         msg_output = [f"🎟️ **{clean_lottery_title}**", f"📅 **Date:** `{draw_date}`", f"🔢 **Series:** `{series_str}`", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"]
         prize_order = [("1st Prize", "🏆"), ("Consolation Prize", "🎁"), ("2nd Prize", "🥈"), ("3rd Prize", "🥉"), ("4th Prize", "4️⃣"), ("5th Prize", "5️⃣"), ("6th Prize", "6️⃣"), ("7th Prize", "7️⃣"), ("8th Prize", "8️⃣"), ("9th Prize", "9️⃣")]
 
@@ -596,7 +588,6 @@ def parse_lottery_result_page(target_url: str):
                 formatted_val = "  ".join(prizes_data[p_key]) if "Prize" in p_key and "1st" not in p_key and "2nd" not in p_key and "3rd" not in p_key and "Consolation" not in p_key else "\n".join(prizes_data[p_key])
                 msg_output.append(f"{emoji} **{prize_headings.get(p_key, p_key)}**\n`{formatted_val}`\n")
 
-        # Build 100% Malayalam TTS Output
         tts_output = {}
         try:
             d = datetime.strptime(draw_date, "%d-%m-%Y")
@@ -643,7 +634,6 @@ def parse_lottery_result_page(target_url: str):
 
         tts_string = "\n\n".join(tts_file_blocks)
 
-        # Cache ONLY when 9th prize is completed (never cache partial live data)
         is_fully_complete = "9th Prize" in prizes_data and len(prizes_data["9th Prize"]) >= 100
         if is_fully_complete:
             GLOBAL_STATE.scraped_cache[draw_date] = {
@@ -739,7 +729,6 @@ def generate_youtube_package(lottery_title, draw_date, video_durations_map, priz
             current_time += dur
             last_rendered_index = idx
 
-    # Conditional Trailing Timestamps for remaining unrendered prize numbers
     if last_rendered_index != -1 and last_rendered_index < (len(all_tier_keys) - 1):
         ts_future = format_timestamp(current_time)
         last_key = all_tier_keys[last_rendered_index]
@@ -930,14 +919,12 @@ async def broadcast_to_channel(client, text=None, video_path=None, audio_path=No
         GLOBAL_STATE.log(f"Channel Broadcast Error: {e}")
 
 async def send_yt_metadata_package(client, chat_id, title_1, title_2, yt_desc, yt_tags):
-    # 1. Send Titles (Copyable)
     t_msg = f"🏷️ **YOUTUBE TITLE (OPTION 1):**\n`{title_1}`\n\n🏷️ **YOUTUBE TITLE (OPTION 2):**\n`{title_2}`"
     await client.send_message(chat_id, t_msg)
     if chat_id != TARGET_CHANNEL_ID:
         await broadcast_to_channel(client, text=t_msg)
     await asyncio.sleep(0.4)
 
-    # 2. Send Description & Timestamps in auto-chunks to prevent MessageTooLong
     desc_chunks = [yt_desc[i:i+3500] for i in range(0, len(yt_desc), 3500)]
     for idx, chunk in enumerate(desc_chunks):
         header = f"📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (PART {idx+1}/{len(desc_chunks)} - TAP TO COPY):**\n" if len(desc_chunks) > 1 else "📝 **YOUTUBE DESCRIPTION & TIMESTAMPS (TAP TO COPY):**\n"
@@ -947,7 +934,6 @@ async def send_yt_metadata_package(client, chat_id, title_1, title_2, yt_desc, y
             await broadcast_to_channel(client, text=d_msg)
         await asyncio.sleep(0.4)
 
-    # 3. Send Tags (Copyable)
     tag_chunks = [yt_tags[i:i+3500] for i in range(0, len(yt_tags), 3500)]
     for chunk in tag_chunks:
         g_msg = f"🏷️ **YOUTUBE TAGS (TAP TO COPY):**\n`{chunk}`"
@@ -957,7 +943,7 @@ async def send_yt_metadata_package(client, chat_id, title_1, title_2, yt_desc, y
         await asyncio.sleep(0.4)
 
 # ==========================================
-# 3. UTILITIES & BACKGROUND PRE-RENDERER
+# 3. UTILITIES & 720P PRE-RENDERERS
 # ==========================================
 def ease_out_expo(x): return 1 if x == 1 else 1 - math.pow(2, -10 * x)
 def ease_in_out_cubic(x): return 4 * x**3 if x < 0.5 else 1 - math.pow(-2 * x + 2, 3) / 2
@@ -999,47 +985,47 @@ def pre_render_background(theme="blue"):
     
     bl = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     glow_color = (255, 80, 120, 80) if theme == "purple" else (80, 150, 255, 80) if theme == "blue" else (255, 215, 0, 60)
-    ImageDraw.Draw(bl).ellipse([int(cx - 700), int(cy - 200), int(cx + 700), int(cy + 450)], fill=glow_color)
-    canvas.alpha_composite(bl.filter(ImageFilter.GaussianBlur(150)))
+    ImageDraw.Draw(bl).ellipse([int(cx - 460), int(cy - 130), int(cx + 460), int(cy + 300)], fill=glow_color)
+    canvas.alpha_composite(bl.filter(ImageFilter.GaussianBlur(100)))
     return canvas
 
 def pre_render_glass_card(district_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
-    f_sub = load_font("bold", 48) 
-    f_main = load_font("black", 85) 
+    f_sub = load_font("bold", 32) 
+    f_main = load_font("black", 56) 
     
     bbox = draw.textbbox((0, 0), district_text, font=f_main)
     text_w = bbox[2] - bbox[0]
-    box_w = max(920, text_w + 160)
+    box_w = max(620, text_w + 110)
     x1 = (WIDTH // 2) - (box_w // 2)
     x2 = (WIDTH // 2) + (box_w // 2)
-    bounds = [x1, 780, x2, 1000]
+    bounds = [x1, 520, x2, 665]
     
-    draw.rounded_rectangle(bounds, radius=30, fill=(20, 10, 35, 230), outline=(255, 215, 0, 190), width=4)
-    draw.rounded_rectangle([bounds[0]+2, bounds[1]+2, bounds[2]-2, bounds[3]-2], radius=28, outline=(255, 255, 255, 100), width=2)
+    draw.rounded_rectangle(bounds, radius=20, fill=(20, 10, 35, 230), outline=(255, 215, 0, 190), width=3)
+    draw.rounded_rectangle([bounds[0]+2, bounds[1]+2, bounds[2]-2, bounds[3]-2], radius=18, outline=(255, 255, 255, 100), width=1)
     
-    draw.text((WIDTH//2, 835), "WINNING DISTRICT", font=f_sub, fill="#B8C0D0", anchor="mm")
-    main_y = 925
+    draw.text((WIDTH//2, 555), "WINNING DISTRICT", font=f_sub, fill="#B8C0D0", anchor="mm")
+    main_y = 615
     
     glow = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     ImageDraw.Draw(glow).text((WIDTH//2, main_y), district_text, font=f_main, fill=(255, 215, 0, 120), anchor="mm")
-    layer.alpha_composite(glow.filter(ImageFilter.GaussianBlur(15)))
+    layer.alpha_composite(glow.filter(ImageFilter.GaussianBlur(10)))
     
-    draw.text((WIDTH//2, main_y + 5), district_text, font=f_main, fill=(0,0,0,230), anchor="mm")
+    draw.text((WIDTH//2, main_y + 3), district_text, font=f_main, fill=(0,0,0,230), anchor="mm")
     draw.text((WIDTH//2, main_y), district_text, font=f_main, fill="#FFFFFF", anchor="mm")
     return layer
 
 def pre_render_ribbon_bang(title_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
-    cx, cy = WIDTH//2, 310
-    font = load_font("extrabold", 44)
+    cx, cy = WIDTH//2, 205
+    font = load_font("extrabold", 30)
     
     bbox = draw.textbbox((0, 0), title_text.upper(), font=font)
     text_w = bbox[2] - bbox[0]
-    w = max(1040, text_w + 120)
-    h = 130
+    w = max(700, text_w + 80)
+    h = 86
     x1, y1 = cx - w//2, cy - h//2
     x2, y2 = cx + w//2, cy + h//2
     
@@ -1051,12 +1037,12 @@ def pre_render_ribbon_bang(title_text):
     grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     grad_layer.paste(grad, (0, y1))
     layer.paste(grad_layer, (0,0), mask_c)
-    draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=3)
+    draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=2)
     
-    draw.text((cx, cy-2), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
-    draw.text((cx, cy-5), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
+    draw.text((cx, cy-1), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
+    draw.text((cx, cy-3), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
     
-    shadow = layer.copy().filter(ImageFilter.GaussianBlur(15))
+    shadow = layer.copy().filter(ImageFilter.GaussianBlur(10))
     shadow_data = np.array(shadow)
     shadow_data[..., :3] = 0
     final = Image.fromarray(shadow_data)
@@ -1066,13 +1052,13 @@ def pre_render_ribbon_bang(title_text):
 def pre_render_ribbon_scroll(title_text):
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
-    cx, cy = WIDTH//2, 280
-    font = load_font("extrabold", 44)
+    cx, cy = WIDTH//2, 185
+    font = load_font("extrabold", 30)
     
     bbox = draw.textbbox((0, 0), title_text.upper(), font=font)
     text_w = bbox[2] - bbox[0]
-    w = max(1040, text_w + 120)
-    h = 120
+    w = max(700, text_w + 80)
+    h = 80
     x1, y1 = cx - w//2, cy - h//2
     x2, y2 = cx + w//2, cy + h//2
     
@@ -1084,12 +1070,12 @@ def pre_render_ribbon_scroll(title_text):
     grad_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
     grad_layer.paste(grad, (0, y1))
     layer.paste(grad_layer, (0,0), mask_c)
-    draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=3)
+    draw.rectangle([x1, y1, x2, y2], outline=(255, 235, 120, 255), width=2)
     
-    draw.text((cx, cy-2), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
-    draw.text((cx, cy-5), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
+    draw.text((cx, cy-1), title_text.upper(), font=font, fill=(255, 224, 102, 255), anchor="mm") 
+    draw.text((cx, cy-3), title_text.upper(), font=font, fill=(58, 5, 0, 255), anchor="mm")
     
-    shadow = layer.copy().filter(ImageFilter.GaussianBlur(15))
+    shadow = layer.copy().filter(ImageFilter.GaussianBlur(10))
     shadow_data = np.array(shadow)
     shadow_data[..., :3] = 0
     final = Image.fromarray(shadow_data)
@@ -1097,20 +1083,20 @@ def pre_render_ribbon_scroll(title_text):
     return final
 
 def pre_render_tight_hero_text(text):
-    font = load_font("hero", 320)
+    font = load_font("hero", 215)
     temp_draw = ImageDraw.Draw(Image.new("RGBA", (1,1)))
     bbox = temp_draw.textbbox((0, 0), text, font=font)
-    tw, th = max(10, bbox[2] - bbox[0] + 120), max(10, bbox[3] - bbox[1] + 120)
+    tw, th = max(10, bbox[2] - bbox[0] + 80), max(10, bbox[3] - bbox[1] + 80)
     
     img = Image.new("RGBA", (tw, th), (0,0,0,0))
     draw = ImageDraw.Draw(img)
     cx, cy = tw // 2, th // 2
     
     shadow = Image.new("RGBA", (tw, th), (0,0,0,0))
-    ImageDraw.Draw(shadow).text((cx, cy + 20), text, font=font, fill=(0, 0, 0, 240), anchor="mm")
-    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(15)))
+    ImageDraw.Draw(shadow).text((cx, cy + 14), text, font=font, fill=(0, 0, 0, 240), anchor="mm")
+    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(10)))
     
-    for i in range(12, 0, -1):
+    for i in range(8, 0, -1):
         draw.text((cx, cy + i), text, font=font, fill=(70, 15, 0, 255), anchor="mm")
         
     mask = Image.new("L", (tw, th), 0)
@@ -1119,24 +1105,24 @@ def pre_render_tight_hero_text(text):
     stops = [(0.0, (255, 255, 230)), (0.2, (255, 220, 0)), (0.7, (255, 160, 0)), (1.0, (180, 60, 0))]
     grad = generate_vertical_gradient(tw, th, stops)
     img.paste(grad, (0, 0), mask)
-    draw.text((cx, cy), text, font=font, fill=None, outline=(255, 240, 150, 255), stroke_width=3, anchor="mm")
+    draw.text((cx, cy), text, font=font, fill=None, outline=(255, 240, 150, 255), stroke_width=2, anchor="mm")
     return img
 
 def pre_render_grid_card(text, is_small=False):
-    w, h = (385, 110) if is_small else (760, 160)
+    w, h = (255, 75) if is_small else (505, 105)
     layer = Image.new("RGBA", (w, h), (0,0,0,0))
     draw = ImageDraw.Draw(layer)
-    draw.rounded_rectangle([0, 0, w, h], radius=15, fill=(15, 5, 20, 240), outline=(255, 215, 0, 200), width=3)
-    draw.rounded_rectangle([3, 3, w-3, h-3], radius=12, outline=(255, 255, 255, 50), width=1)
+    draw.rounded_rectangle([0, 0, w, h], radius=10, fill=(15, 5, 20, 240), outline=(255, 215, 0, 200), width=2)
+    draw.rounded_rectangle([2, 2, w-2, h-2], radius=8, outline=(255, 255, 255, 50), width=1)
     
-    cx, cy = w // 2, h // 2 - 5
-    font = load_font("hero", 80 if is_small else 95)
-    draw.text((cx, cy + 5), text, font=font, fill=(0, 0, 0, 255), anchor="mm")
+    cx, cy = w // 2, h // 2 - 3
+    font = load_font("hero", 54 if is_small else 64)
+    draw.text((cx, cy + 3), text, font=font, fill=(0, 0, 0, 255), anchor="mm")
     draw.text((cx, cy), text, font=font, fill=(255, 250, 240, 255), anchor="mm")
     return layer
 
 # ==========================================
-# 4. VIDEO RENDERING ENGINES
+# 4. VIDEO RENDERING ENGINES (720P @ 25 FPS)
 # ==========================================
 def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_dur, impact_time_override=None, progress_cb=None):
     audio_file = out_path.replace(".mp4", ".wav")
@@ -1163,31 +1149,11 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
     
     confetti = []
     confetti_triggered = False
-    
-    temp_draw = ImageDraw.Draw(Image.new("RGBA", (1,1)))
-    bbox_glass = temp_draw.textbbox((0, 0), district, font=load_font("black", 85))
-    box_w = max(920, (bbox_glass[2] - bbox_glass[0]) + 160)
-    glass_bounds = [(WIDTH // 2) - (box_w // 2), 780, (WIDTH // 2) + (box_w // 2), 1000]
-    
-    bbox_ribbon = temp_draw.textbbox((0, 0), prize_heading.upper(), font=load_font("extrabold", 44))
-    ribbon_w = max(1040, (bbox_ribbon[2] - bbox_ribbon[0]) + 120)
-    rx = (ribbon_w // 2) - 40
-    
-    box_glitters = [
-        {'x': glass_bounds[0], 'y': glass_bounds[1], 'phase': random.uniform(0, 6), 'speed': 0.15},
-        {'x': glass_bounds[2], 'y': glass_bounds[1], 'phase': random.uniform(0, 6), 'speed': 0.12},
-        {'x': glass_bounds[0], 'y': glass_bounds[3], 'phase': random.uniform(0, 6), 'speed': 0.18},
-        {'x': glass_bounds[2], 'y': glass_bounds[3], 'phase': random.uniform(0, 6), 'speed': 0.14},
-        {'x': WIDTH//2 - rx, 'y': 310 - 50, 'phase': random.uniform(0, 6), 'speed': 0.10},
-        {'x': WIDTH//2 + rx, 'y': 310 - 50, 'phase': random.uniform(0, 6), 'speed': 0.15},
-        {'x': WIDTH//2 - rx, 'y': 310 + 50, 'phase': random.uniform(0, 6), 'speed': 0.12},
-        {'x': WIDTH//2 + rx, 'y': 310 + 50, 'phase': random.uniform(0, 6), 'speed': 0.17},
-    ]
 
     base_bg = bg_asset.copy()
     b_draw = ImageDraw.Draw(base_bg)
-    b_draw.text((WIDTH//2, 90), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, 255), anchor="mm")
-    b_draw.text((WIDTH//2, 165), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
+    b_draw.text((WIDTH//2, 60), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 18), fill=(200, 208, 224, 255), anchor="mm")
+    b_draw.text((WIDTH//2, 110), lottery_title, font=load_font("black", 46), fill=(255, 255, 255, 255), anchor="mm")
     base_bg.alpha_composite(ribbon_asset)
 
     v_filters = []
@@ -1197,7 +1163,6 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         v_filters.append(f"fade=t=out:st={fade_out_st}:d={TRANSITION_FADE_DURATION}")
     v_filter_str = ",".join(v_filters) if v_filters else "null"
 
-    # Direct stdin pipe to FFmpeg (0 MB disk space used)
     cmd = [
         "ffmpeg", "-y", "-threads", "2",
         "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -1239,26 +1204,26 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
         if time_sec > (impact_time - 0.2):
             slide = ease_out_expo(min((time_sec - (impact_time - 0.2)) / 0.3, 1.0))
             temp = Image.new("RGBA", (WIDTH, HEIGHT), (0,0,0,0))
-            temp.paste(glass_asset, (0, int(150 * (1 - slide))))
+            temp.paste(glass_asset, (0, int(100 * (1 - slide))))
             canvas.alpha_composite(temp)
 
             hp = min((time_sec - (impact_time - 0.2)) / 0.2, 1.0)
             scale = 2.5 - (ease_out_expo(hp) * 1.5)
             nw, nh = max(10, int(orig_tw * scale)), max(10, int(orig_th * scale))
             scaled_hero = hero_asset.resize((nw, nh), Image.Resampling.BILINEAR)
-            canvas.paste(scaled_hero, (WIDTH // 2 - nw // 2, 570 - nh // 2), scaled_hero)
+            canvas.paste(scaled_hero, (WIDTH // 2 - nw // 2, 380 - nh // 2), scaled_hero)
 
             if time_sec >= impact_time:
                 if not confetti_triggered:
                     confetti_triggered = True
-                    for _ in range(200):
+                    for _ in range(140):
                         angle = random.uniform(0, 2*math.pi)
-                        speed = random.uniform(12, 45)
-                        confetti.append({'x': WIDTH//2, 'y': 570, 'vx': math.cos(angle)*speed, 'vy': math.sin(angle)*speed-15, 'col': random.choice([(255,215,0), (0,212,255), (255,0,150), (255,255,255)]), 'size': random.randint(4, 12), 'life': 1.0})
+                        speed = random.uniform(8, 30)
+                        confetti.append({'x': WIDTH//2, 'y': 380, 'vx': math.cos(angle)*speed, 'vy': math.sin(angle)*speed-10, 'col': random.choice([(255,215,0), (0,212,255), (255,0,150), (255,255,255)]), 'size': random.randint(3, 8), 'life': 1.0})
 
                 frames_since = int(frame - (impact_time * FPS))
                 if frames_since < 5:
-                    intensity = int(20 - (frames_since * 4))
+                    intensity = int(14 - (frames_since * 3))
                     shake_dx, shake_dy = random.randint(-intensity, intensity), random.randint(-intensity, intensity)
 
         if time_sec >= impact_time:
@@ -1268,7 +1233,7 @@ def render_bang_video(theme, prize_heading, item, lottery_title, out_path, base_
                 if p['life'] > 0:
                     p['x'] += p['vx']
                     p['y'] += p['vy']
-                    p['vy'] += 2.0
+                    p['vy'] += 1.5
                     p['life'] -= 0.025
                     s = int(p['size'])
                     c_draw.rectangle([int(p['x'])-s, int(p['y'])-s//2, int(p['x'])+s, int(p['y'])+s//2], fill=p['col']+(int(255*max(p['life'], 0)),))
@@ -1308,33 +1273,33 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     
     start_delay = start_delay_override if (start_delay_override and start_delay_override > 0) else (audio_dur if audio_dur > 0 else 2.0)
     calc_dur = start_delay + base_dur
-    total_frames = int(30 * calc_dur)
+    total_frames = int(25 * calc_dur)
     
     cols = 4 if is_4col else 2
     bg_asset = pre_render_background(theme)
     ribbon_asset = pre_render_ribbon_scroll(prize_heading)
 
-    # 1. Build Base Background (1920x1080)
+    # 1. Build Base Background (1280x720)
     base_bg = bg_asset.copy()
     b_draw = ImageDraw.Draw(base_bg)
-    b_draw.text((WIDTH//2, 60), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 26), fill=(200, 208, 224, 255), anchor="mm")
-    b_draw.text((WIDTH//2, 135), lottery_title, font=load_font("black", 68), fill=(255, 255, 255, 255), anchor="mm")
+    b_draw.text((WIDTH//2, 40), "KERALA STATE LOTTERIES • OFFICIAL RESULT", font=load_font("bold", 18), fill=(200, 208, 224, 255), anchor="mm")
+    b_draw.text((WIDTH//2, 90), lottery_title, font=load_font("black", 46), fill=(255, 255, 255, 255), anchor="mm")
     base_bg.alpha_composite(ribbon_asset)
     
     bg_path = out_path.replace(".mp4", "_bg.bmp")
     base_bg.save(bg_path, "BMP")
     del base_bg, bg_asset, ribbon_asset
 
-    # 2. Build Tall Cards Canvas
+    # 2. Build Tall Cards Canvas for 720p
     rows = math.ceil(len(numbers_list) / cols)
-    row_height = 150 if is_4col else 200
-    total_canvas_h = max(HEIGHT, (rows * row_height) + 400)
+    row_height = 100 if is_4col else 135
+    total_canvas_h = max(HEIGHT, (rows * row_height) + 260)
     
     giant_canvas = Image.new("RGBA", (WIDTH, total_canvas_h), (0, 0, 0, 0))
     for i, num in enumerate(numbers_list):
         col, row = i % cols, i // cols
-        c_x = [240, 720, 1200, 1680][col] if is_4col else (540 if col == 0 else 1380)
-        c_y = 50 + (row * row_height)
+        c_x = [160, 480, 800, 1120][col] if is_4col else (360 if col == 0 else 920)
+        c_y = 35 + (row * row_height)
         card = pre_render_grid_card(num, is_small=is_4col)
         cw, ch = card.size
         giant_canvas.paste(card, (int(c_x - cw//2), int(c_y)), card)
@@ -1344,8 +1309,8 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     del giant_canvas
     gc.collect()
 
-    # 3. Viewport & Scroll Math
-    VIEW_Y = 360
+    # 3. Viewport & Scroll Math for 720p
+    VIEW_Y = 240
     VIEW_H = HEIGHT - VIEW_Y
     max_scroll = max(0, total_canvas_h - VIEW_H)
     scroll_start = start_delay
@@ -1354,7 +1319,7 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
 
     y_expr = f"if(lte(t\\,{scroll_start})\\,0\\,if(gte(t\\,{scroll_end})\\,{max_scroll}\\,{max_scroll}*(t-{scroll_start})/{scroll_dur}))"
 
-    v_filter = f"[1:v]crop=w=1920:h={VIEW_H}:x=0:y='{y_expr}'[scrolled];[0:v][scrolled]overlay=x=0:y={VIEW_Y}[v_combined]"
+    v_filter = f"[1:v]crop=w={WIDTH}:h={VIEW_H}:x=0:y='{y_expr}'[scrolled];[0:v][scrolled]overlay=x=0:y={VIEW_Y}[v_combined]"
 
     if ENABLE_TRANSITIONS and TRANSITION_FADE_DURATION > 0:
         fade_out_st = max(0.0, calc_dur - TRANSITION_FADE_DURATION)
@@ -1363,11 +1328,10 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
     else:
         final_v_label = "[v_combined]"
 
-    # Notice: Explicit -framerate 30 added before -loop 1 to prevent timestamp mismatch freeze
     cmd = [
         "ffmpeg", "-y", "-threads", "2",
-        "-framerate", "30", "-loop", "1", "-t", str(calc_dur), "-i", bg_path,
-        "-framerate", "30", "-loop", "1", "-t", str(calc_dur), "-i", cards_path
+        "-framerate", "25", "-loop", "1", "-t", str(calc_dur), "-i", bg_path,
+        "-framerate", "25", "-loop", "1", "-t", str(calc_dur), "-i", cards_path
     ]
 
     if os.path.exists(audio_file):
@@ -1385,13 +1349,12 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
         ])
 
     cmd.extend([
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
         "-progress", "pipe:1",
         out_path
     ])
 
-    # 4. Run Process with Live Progress Output
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     
     for line in process.stdout:
@@ -1405,14 +1368,13 @@ def render_scroll_video(theme, prize_heading, numbers_list, lottery_title, out_p
                 
     process.wait()
 
-    # 5. Clean up temporary PNGs
     for p in [bg_path, cards_path]:
         if os.path.exists(p):
             os.remove(p)
     gc.collect()
-    
+
 # ==========================================
-# 5. BOT PIPELINE & FFMPEG STITCHING
+# 5. BOT PIPELINE & FFMPEG STITCHING (STREAM COPY)
 # ==========================================
 def compress_and_combine(video_files, final_output):
     if not video_files: return
@@ -1420,14 +1382,12 @@ def compress_and_combine(video_files, final_output):
         shutil.copy(video_files[0], final_output)
         return
 
-    # 1. Write sequential manifest file for the demuxer
     list_file_path = os.path.join(DOWNLOAD_DIR, "concat_list.txt")
     with open(list_file_path, "w") as f:
         for vid in video_files:
             clean_path = os.path.abspath(vid).replace("'", "'\\''")
             f.write(f"file '{clean_path}'\n")
 
-    # 2. Instant Stream-Copy (Zero CPU re-encoding, finishes in 1-2 seconds)
     cmd = [
         "ffmpeg", "-y",
         "-f", "concat",
@@ -1439,7 +1399,6 @@ def compress_and_combine(video_files, final_output):
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # 3. Clean up manifest and intermediate segment files
     if os.path.exists(list_file_path):
         os.remove(list_file_path)
 
@@ -1460,7 +1419,6 @@ async def execute_result_pipeline(app, chat_id, target_url):
         await app.send_message(chat_id, chunk)
         await asyncio.sleep(0.4)
 
-    # Broadcast scraped text result to Channel
     await broadcast_to_channel(app, text=text_msg)
 
     if tts_txt and tts_txt.strip():
@@ -1472,7 +1430,6 @@ async def execute_result_pipeline(app, chat_id, target_url):
             caption=f"🗣️ **Malayalam Pronunciation File for TTS**\n📅 `{draw_date}`"
         )
         
-        # Broadcast TTS file to Channel
         tts_file.seek(0)
         await broadcast_to_channel(app, document=tts_file, caption=f"🗣️ **Malayalam TTS Script** • `{draw_date}`")
         await asyncio.sleep(0.4)
@@ -1622,12 +1579,16 @@ async def run_pyrofork_bot():
                         p1_file = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}_p1.wav")
                         p2_file = os.path.join(DOWNLOAD_DIR, f"{p_name.replace(' ', '_')}_p2.wav")
 
+                        tasks = []
                         if h_text:
-                            await generate_cartesia_audio(h_text, p1_file)
-                            part1_dur = get_audio_duration(p1_file)
-
+                            tasks.append(generate_cartesia_audio(h_text, p1_file))
                         if n_text:
-                            await generate_cartesia_audio(n_text, p2_file)
+                            tasks.append(generate_cartesia_audio(n_text, p2_file))
+                        if tasks:
+                            await asyncio.gather(*tasks)
+
+                        if h_text and os.path.exists(p1_file):
+                            part1_dur = get_audio_duration(p1_file)
 
                         if os.path.exists(p1_file) and os.path.exists(p2_file):
                             concat_wav_files(p1_file, p2_file, audio_path)
@@ -1681,7 +1642,6 @@ async def run_pyrofork_bot():
                     await status_msg.edit_text(f"🚀 **Uploading {p_name} Video...**")
                     await client.send_video(chat_id=chat_id, video=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
                     await broadcast_to_channel(client, video_path=out_path, caption=f"🏆 **{p_name}** - `{draw_date}`")
-                    # Delete intermediate WAV file immediately to free RAM disk
                     if os.path.exists(audio_path):
                         os.remove(audio_path)
             except Exception as e:
@@ -1696,7 +1656,6 @@ async def run_pyrofork_bot():
             action, tier_idx, draw_date = callback_query.matches[0].group(1), int(callback_query.matches[0].group(2)), callback_query.matches[0].group(3)
             await callback_query.message.edit_text("🔎 **Fetching draw results for rendering...**")
             
-            # Always fetch fresh data on render to ensure real-time live draws are captured
             if draw_date in GLOBAL_STATE.scraped_cache:
                 c_data = GLOBAL_STATE.scraped_cache[draw_date]
                 tts_dict = c_data["tts_dict"]
@@ -1742,15 +1701,14 @@ async def run_pyrofork_bot():
                         video_files.append(vid_out)
                         video_durations_map[p_name] = get_video_duration(vid_out)
 
-                    # Pause for 2 seconds to allow container CPU burst credits to refill
+                    # 5-second breathing window for container CPU recovery
                     await asyncio.sleep(5)
 
-            # Generate and Send 1-Tap Copyable YouTube Metadata Package with Prize Numbers in Timestamps
             title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map, prizes)
             await send_yt_metadata_package(client, callback_query.message.chat.id, title_1, title_2, yt_desc, yt_tags)
 
             if action == "ru" and len(video_files) > 1:
-                gc.collect()  # Flush previous render buffers from RAM before stitching
+                gc.collect()
                 GLOBAL_STATE.set_status("Final Stitching", 0.95, f"Combining {len(video_files)} video segments...")
                 status_msg = await client.send_message(callback_query.message.chat.id, "🗜️ **Combining selected videos...**")
                 await asyncio.to_thread(compress_and_combine, video_files, FINAL_OUTPUT_VIDEO)
@@ -1827,10 +1785,9 @@ async def run_pyrofork_bot():
                         video_files.append(vid_out)
                         video_durations_map[p_name] = get_video_duration(vid_out)
 
-                    # Pause for 2 seconds to allow container CPU burst credits to refill
+                    # 5-second breathing window for container CPU recovery
                     await asyncio.sleep(5)
 
-            # Generate and Send 1-Tap Copyable YouTube Metadata Package with Prize Numbers in Timestamps
             title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map, prizes)
             await send_yt_metadata_package(client, message.chat.id, title_1, title_2, yt_desc, yt_tags)
 
