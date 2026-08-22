@@ -1828,7 +1828,7 @@ async def run_pyrofork_bot():
                         video_durations_map[p_name] = get_video_duration(vid_out)
 
                     # Pause for 2 seconds to allow container CPU burst credits to refill
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(5)
 
             # Generate and Send 1-Tap Copyable YouTube Metadata Package with Prize Numbers in Timestamps
             title_1, title_2, yt_desc, yt_tags = generate_youtube_package(lottery_title, draw_date, video_durations_map, prizes)
