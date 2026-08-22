@@ -1420,35 +1420,33 @@ def compress_and_combine(video_files, final_output):
         shutil.copy(video_files[0], final_output)
         return
 
-    # 1. Write the sequential file list for FFmpeg concat demuxer
+    # 1. Write sequential manifest file for the demuxer
     list_file_path = os.path.join(DOWNLOAD_DIR, "concat_list.txt")
     with open(list_file_path, "w") as f:
         for vid in video_files:
             clean_path = os.path.abspath(vid).replace("'", "'\\''")
             f.write(f"file '{clean_path}'\n")
 
-    # 2. Sequential concat re-encode (Reads 1 file at a time -> <60MB RAM; rebuilds timestamps)
+    # 2. Instant Stream-Copy (Zero CPU re-encoding, finishes in 1-2 seconds)
     cmd = [
-        "ffmpeg", "-y", "-threads", "2",
+        "ffmpeg", "-y",
         "-f", "concat",
         "-safe", "0",
         "-i", list_file_path,
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
-        "-avoid_negative_ts", "make_zero",
-        "-fflags", "+genpts",
+        "-c", "copy",
+        "-movflags", "+faststart",
         final_output
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    # 3. Cleanup temporary files
+    # 3. Clean up manifest and intermediate segment files
     if os.path.exists(list_file_path):
         os.remove(list_file_path)
 
     for vid in video_files:
         if os.path.exists(vid):
             os.remove(vid)
-
+    
 async def execute_result_pipeline(app, chat_id, target_url):
     msg = await app.send_message(chat_id, "🔎 **Fetching lottery draw data...**")
     
